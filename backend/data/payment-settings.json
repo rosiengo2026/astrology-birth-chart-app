@@ -1,0 +1,9 @@
+{
+  "vietqrImageUrl": "/api/uploads/vietqr-vcb-default.png",
+  "vietqrInstructionsVi": "Ngân hàng: Vietcombank\nChủ tài khoản: NGO HONG NGA\nSố tài khoản: 0011001939887\nChi nhánh: Trụ sở CN Sở giao dịch\n\nQuét mã QR hoặc chuyển khoản đúng số tiền và nội dung chuyển khoản hiển thị bên trên.",
+  "vietqrInstructionsEn": "Bank: Vietcombank\nAccount name: NGO HONG NGA\nAccount number: 0011001939887\nBranch: Trụ sở CN Sở giao dịch\n\nScan the QR code or transfer the exact amount and transfer memo shown above.",
+  "paypalUnlockUrl": "https://www.paypal.com/ncp/payment/BEDQ4XH9ANHDY",
+  "paypalQrImageUrl": "/api/uploads/paypal-qr-default.png",
+  "aspectUnlockPriceVnd": 100000,
+  "aspectUnlockPriceUsd": 20
+}

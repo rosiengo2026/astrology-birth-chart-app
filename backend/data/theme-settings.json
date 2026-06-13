@@ -1,0 +1,21 @@
+{
+  "logoUrl": "/api/uploads/logo-1777724404913-edfa37f76f31cc50.png",
+  "backgroundImageUrl": "/api/uploads/bg-1777725172538-cf28c659236b6c7a.png",
+  "siteTitle": "Blogchiemtinh.com",
+  "backgroundColor": "#242528",
+  "surfaceColor": "#0d0d0d",
+  "panelBorderColor": "#aaaeb6",
+  "bodyTextColor": "#ebfb04",
+  "mutedTextColor": "#edf2b6",
+  "headingTextColor": "#ffffff",
+  "linkColor": "#21a9e4",
+  "linkHoverColor": "#7dd3fc",
+  "warningTextColor": "#fcd34d",
+  "errorTextColor": "#fb7185",
+  "fontBody": "Inter",
+  "fontHeading": "Inter",
+  "fontUi": "Inter",
+  "fontLink": "Inter",
+  "fontWarning": "Inter",
+  "fontCode": "JetBrains Mono"
+}

@@ -1,0 +1,22 @@
+{
+  "sessions": [
+    {
+      "sessionId": "5c6cc80e-362d-4c4c-a249-794ead570d63",
+      "transferContent": "natalchart-CDBAC9F8",
+      "amount": 100000,
+      "currency": "VND",
+      "status": "pending",
+      "createdAt": "2026-06-13T05:49:12.143Z",
+      "expiresAt": "2026-06-13T06:19:12.143Z"
+    },
+    {
+      "sessionId": "be410ae3-e7fe-432d-bec4-0ad5202d0b33",
+      "transferContent": "natalchart-50861A8E",
+      "amount": 100000,
+      "currency": "VND",
+      "status": "pending",
+      "createdAt": "2026-06-13T05:53:33.200Z",
+      "expiresAt": "2026-06-13T06:23:33.200Z"
+    }
+  ]
+}
