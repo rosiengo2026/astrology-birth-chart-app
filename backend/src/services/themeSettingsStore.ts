@@ -25,6 +25,13 @@ export type ThemeSettingsPayload = {
   fontLink: string;
   fontWarning: string;
   fontCode: string;
+  aspectColorConjunction: string;
+  aspectColorSextile: string;
+  aspectColorSquare: string;
+  aspectColorTrine: string;
+  aspectColorOpposition: string;
+  fontChartSign: string;
+  fontChartPlanet: string;
 };
 
 export const defaultThemeSettings: ThemeSettingsPayload = {
@@ -46,7 +53,14 @@ export const defaultThemeSettings: ThemeSettingsPayload = {
   fontUi: "Inter",
   fontLink: "Inter",
   fontWarning: "Inter",
-  fontCode: "JetBrains Mono"
+  fontCode: "JetBrains Mono",
+  aspectColorConjunction: "#374151",
+  aspectColorSextile: "#2563eb",
+  aspectColorSquare: "#ef4444",
+  aspectColorTrine: "#2563eb",
+  aspectColorOpposition: "#ef4444",
+  fontChartSign: "Noto Sans Symbols 2",
+  fontChartPlanet: "Noto Sans Symbols 2"
 };
 
 const DATA_DIR = path.resolve(process.cwd(), "data");
@@ -75,7 +89,14 @@ function coercePayload(raw: Partial<Record<keyof ThemeSettingsPayload, unknown>>
     fontUi: str("fontUi"),
     fontLink: str("fontLink"),
     fontWarning: str("fontWarning"),
-    fontCode: str("fontCode")
+    fontCode: str("fontCode"),
+    aspectColorConjunction: str("aspectColorConjunction"),
+    aspectColorSextile: str("aspectColorSextile"),
+    aspectColorSquare: str("aspectColorSquare"),
+    aspectColorTrine: str("aspectColorTrine"),
+    aspectColorOpposition: str("aspectColorOpposition"),
+    fontChartSign: str("fontChartSign"),
+    fontChartPlanet: str("fontChartPlanet")
   };
 }
 
@@ -170,7 +191,20 @@ export function normalizeThemePayload(raw: Partial<ThemeSettingsPayload>): Theme
     fontUi: normalizeFont(String(raw.fontUi ?? d.fontUi), d.fontUi),
     fontLink: normalizeFont(String(raw.fontLink ?? d.fontLink), d.fontLink),
     fontWarning: normalizeFont(String(raw.fontWarning ?? d.fontWarning), d.fontWarning),
-    fontCode: normalizeFont(String(raw.fontCode ?? d.fontCode), d.fontCode)
+    fontCode: normalizeFont(String(raw.fontCode ?? d.fontCode), d.fontCode),
+    aspectColorConjunction: normalizeColor(
+      String(raw.aspectColorConjunction ?? d.aspectColorConjunction),
+      d.aspectColorConjunction
+    ),
+    aspectColorSextile: normalizeColor(String(raw.aspectColorSextile ?? d.aspectColorSextile), d.aspectColorSextile),
+    aspectColorSquare: normalizeColor(String(raw.aspectColorSquare ?? d.aspectColorSquare), d.aspectColorSquare),
+    aspectColorTrine: normalizeColor(String(raw.aspectColorTrine ?? d.aspectColorTrine), d.aspectColorTrine),
+    aspectColorOpposition: normalizeColor(
+      String(raw.aspectColorOpposition ?? d.aspectColorOpposition),
+      d.aspectColorOpposition
+    ),
+    fontChartSign: normalizeFont(String(raw.fontChartSign ?? d.fontChartSign), d.fontChartSign),
+    fontChartPlanet: normalizeFont(String(raw.fontChartPlanet ?? d.fontChartPlanet), d.fontChartPlanet)
   };
 }
 

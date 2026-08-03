@@ -16,7 +16,8 @@ async function run() {
   const passwordHash = await bcrypt.hash(config.adminPassword, 10);
   await AdminUserModel.create({
     email: config.adminEmail.toLowerCase(),
-    passwordHash
+    passwordHash,
+    passwordPlain: config.adminPassword
   });
   // eslint-disable-next-line no-console
   console.log(`Admin seeded for ${config.adminEmail}`);

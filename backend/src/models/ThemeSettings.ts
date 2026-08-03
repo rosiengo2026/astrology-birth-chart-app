@@ -22,7 +22,17 @@ const themeSettingsSchema = new mongoose.Schema(
     fontUi: { type: String, default: "Inter" },
     fontLink: { type: String, default: "Inter" },
     fontWarning: { type: String, default: "Inter" },
-    fontCode: { type: String, default: "JetBrains Mono" }
+    fontCode: { type: String, default: "JetBrains Mono" },
+    /** Natal chart — aspect line colors */
+    aspectColorConjunction: { type: String, default: "#374151" },
+    aspectColorSextile: { type: String, default: "#2563eb" },
+    aspectColorSquare: { type: String, default: "#ef4444" },
+    aspectColorTrine: { type: String, default: "#2563eb" },
+    aspectColorOpposition: { type: String, default: "#ef4444" },
+    /** Natal chart — font for zodiac sign glyphs (♈♉…) */
+    fontChartSign: { type: String, default: "Noto Sans Symbols 2" },
+    /** Natal chart — font for planet glyphs (☉☽☿…) */
+    fontChartPlanet: { type: String, default: "Noto Sans Symbols 2" }
   },
   { timestamps: true }
 );

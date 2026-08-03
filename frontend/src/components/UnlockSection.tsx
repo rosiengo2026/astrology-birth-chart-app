@@ -17,6 +17,8 @@ interface UnlockSectionProps {
   children: ReactNode;
   preview: ReactNode;
   buttonLabel?: string;
+  /** Skip payment gate and show full content (admin storefront preview). */
+  forceUnlocked?: boolean;
 }
 
 type AspectPaymentOptions = {
@@ -28,6 +30,7 @@ type AspectPaymentOptions = {
     instructionsVi: string;
     instructionsEn: string;
     sessionTtlMinutes: number;
+    webhookConfigured?: boolean;
   };
   paypal: {
     amount: number;
@@ -57,10 +60,32 @@ function buildPaypalCheckoutUrl(): string {
   return `${base}/payments/aspect/paypal/start`;
 }
 
+function WebhookFallbackNotice() {
+  return (
+    <p className="rounded border border-amber-500/30 bg-amber-500/10 p-2 text-xs leading-relaxed text-[var(--theme-warning)] font-[family:var(--font-theme-warning)]">
+      {bi(
+        "If this page does not unlock automatically after your transfer, please email ",
+        "Nếu trang không tự mở khóa sau khi chuyển khoản, vui lòng liên hệ admin qua email "
+      )}
+      <a
+        href="mailto:wakagemstone@gmail.com"
+        className="font-semibold text-amber-100 underline hover:text-white"
+      >
+        wakagemstone@gmail.com
+      </a>
+      {bi(
+        " with your transfer memo to receive the full aspect interpretations.",
+        " kèm nội dung chuyển khoản để nhận lời giải aspect đầy đủ."
+      )}
+    </p>
+  );
+}
+
 export function UnlockSection({
   children,
   preview,
-  buttonLabel = bi("Unlock full aspects", "Mở khóa đầy đủ aspect")
+  buttonLabel = bi("Unlock full aspects", "Mở khóa đầy đủ aspect"),
+  forceUnlocked = false
 }: UnlockSectionProps) {
   const [isPaid, setIsPaid] = useState(false);
   const [showPaymentOptions, setShowPaymentOptions] = useState(false);
@@ -118,7 +143,7 @@ export function UnlockSection({
   }, [refreshUnlockState]);
 
   useEffect(() => {
-    if (!showPaymentOptions) return;
+    if (forceUnlocked || isPaid) return;
     let cancelled = false;
     setPaymentOptionsLoading(true);
     setPaymentOptionsError(null);
@@ -142,7 +167,7 @@ export function UnlockSection({
     return () => {
       cancelled = true;
     };
-  }, [showPaymentOptions]);
+  }, [forceUnlocked, isPaid]);
 
   const startVietQrSession = useCallback(async () => {
     setVietQrSessionLoading(true);
@@ -224,6 +249,10 @@ export function UnlockSection({
   const activeInstructionsVi = vietQrSession?.instructionsVi || paymentOptions?.vietqr.instructionsVi || "";
   const activeInstructionsEn = vietQrSession?.instructionsEn || paymentOptions?.vietqr.instructionsEn || "";
 
+  if (forceUnlocked) {
+    return <>{children}</>;
+  }
+
   if (isPaid) {
     return (
       <div className="space-y-2">
@@ -260,6 +289,7 @@ export function UnlockSection({
       >
         {buttonLabel}
       </button>
+      {paymentOptions?.vietqr.webhookConfigured === false && <WebhookFallbackNotice />}
       {showPaymentOptions && (
         <div className="rounded-lg border border-[var(--theme-border)] bg-[var(--theme-panel)] p-3">
           <p className="text-xs font-semibold text-[var(--theme-heading)] font-[family:var(--font-theme-heading)]">

@@ -1,0 +1,26 @@
+[
+  {
+    "id": "5c2f1f78-63f8-4710-940e-bff2fb3c8d50",
+    "email": "admin@blogchiemtinh.com",
+    "passwordHash": "$2b$10$EkePTFqB/iGiotiaeJJMNu0iOqtbjPnB6Zge1yq67YofWzYEdCbGy",
+    "passwordPlain": "Qwer1234##",
+    "role": "admin",
+    "permissions": [],
+    "createdAt": "2026-08-02T14:05:54.107Z"
+  },
+  {
+    "id": "2070bb46-a280-467a-b1bf-ee9e91266823",
+    "email": "chauchau@blogchiemtinh.com",
+    "passwordHash": "$2b$10$gWZ3T665RTbP57rRLiq4ROH4kVdhXsOM8m9Zz0zHOQxaN9vTTosb6",
+    "passwordPlain": "CC123##",
+    "role": "member",
+    "permissions": [
+      "cms:read",
+      "cms:write",
+      "theme:read",
+      "theme:write",
+      "preview:access"
+    ],
+    "createdAt": "2026-08-02T14:15:18.339Z"
+  }
+]

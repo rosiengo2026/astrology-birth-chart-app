@@ -23,10 +23,28 @@ export type ChartPointName =
   | "Uranus"
   | "Neptune"
   | "Pluto"
+  | "Chiron"
+  | "Ceres"
+  | "Pallas"
+  | "Juno"
+  | "Vesta"
   | "North Node"
   | "South Node"
   | "Lilith"
-  | "Part of Fortune";
+  | "Priapus"
+  | "Cupido"
+  | "Hades"
+  | "Zeus"
+  | "Kronos"
+  | "Apollon"
+  | "Admetos"
+  | "Vulkanus"
+  | "Poseidon"
+  | "Part of Fortune"
+  | "Part of Spirit"
+  | "Part of Eros"
+  | "Part of Marriage"
+  | "Part of Calamity";
 
 export interface PlanetPosition {
   planet: ChartPointName;

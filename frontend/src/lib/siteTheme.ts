@@ -20,6 +20,13 @@ export type SiteThemeSettings = {
   fontLink: string;
   fontWarning: string;
   fontCode: string;
+  aspectColorConjunction: string;
+  aspectColorSextile: string;
+  aspectColorSquare: string;
+  aspectColorTrine: string;
+  aspectColorOpposition: string;
+  fontChartSign: string;
+  fontChartPlanet: string;
 };
 
 const DEFAULT_API_BASE = "http://localhost:4000/api";
@@ -78,8 +85,63 @@ export const defaultSiteTheme: SiteThemeSettings = {
   fontUi: "Inter",
   fontLink: "Inter",
   fontWarning: "Inter",
-  fontCode: "JetBrains Mono"
+  fontCode: "JetBrains Mono",
+  aspectColorConjunction: "#374151",
+  aspectColorSextile: "#2563eb",
+  aspectColorSquare: "#ef4444",
+  aspectColorTrine: "#2563eb",
+  aspectColorOpposition: "#ef4444",
+  fontChartSign: "Noto Sans Symbols 2",
+  fontChartPlanet: "Noto Sans Symbols 2"
 };
+
+export const CHART_GLYPH_FONT_CHOICES: { value: string; label: string }[] = [
+  { value: "Noto Sans Symbols 2", label: "Noto Sans Symbols 2 (recommended)" },
+  { value: "Times New Roman", label: "Times New Roman" },
+  { value: "Segoe UI Symbol", label: "Segoe UI Symbol (Windows)" },
+  { value: "Apple Symbols", label: "Apple Symbols (macOS)" },
+  { value: "Symbola", label: "Symbola" },
+  { value: "Noto Serif", label: "Noto Serif" },
+  { value: "Merriweather", label: "Merriweather" },
+  { value: "Playfair Display", label: "Playfair Display" }
+];
+
+/** @deprecated use CHART_GLYPH_FONT_CHOICES */
+export const CHART_SIGN_FONT_CHOICES = CHART_GLYPH_FONT_CHOICES;
+
+export type AspectTypeName = "Conjunction" | "Sextile" | "Square" | "Trine" | "Opposition";
+
+export function chartAspectColorMap(theme: SiteThemeSettings): Record<AspectTypeName, string> {
+  return {
+    Conjunction: theme.aspectColorConjunction,
+    Sextile: theme.aspectColorSextile,
+    Square: theme.aspectColorSquare,
+    Trine: theme.aspectColorTrine,
+    Opposition: theme.aspectColorOpposition
+  };
+}
+
+export function chartGlyphFontStack(fontChoice: string): string {
+  const choice = fontChoice.trim();
+  if (choice === "Segoe UI Symbol") {
+    return '"Segoe UI Symbol", "Noto Sans Symbols 2", "Apple Symbols", serif';
+  }
+  if (choice === "Apple Symbols") {
+    return '"Apple Symbols", "Noto Sans Symbols 2", "Segoe UI Symbol", serif';
+  }
+  if (choice === "Symbola") {
+    return 'Symbola, "Noto Sans Symbols 2", "Segoe UI Symbol", serif';
+  }
+  return `${fontCSSStack(choice)}, "Segoe UI Symbol", "Apple Symbols", serif`;
+}
+
+export function chartSignFontStack(theme: SiteThemeSettings): string {
+  return chartGlyphFontStack(theme.fontChartSign);
+}
+
+export function chartPlanetFontStack(theme: SiteThemeSettings): string {
+  return chartGlyphFontStack(theme.fontChartPlanet);
+}
 
 export const THEME_FONT_CHOICES: { value: string; label: string }[] = [
   { value: "system-ui", label: "System UI (OS default)" },
@@ -163,7 +225,9 @@ export function applySiteThemeToDocument(theme: SiteThemeSettings): void {
     theme.fontUi,
     theme.fontLink,
     theme.fontWarning,
-    theme.fontCode
+    theme.fontCode,
+    theme.fontChartSign,
+    theme.fontChartPlanet
   ]);
   const existing = document.getElementById(LINK_ID) as HTMLLinkElement | null;
   if (!href) {

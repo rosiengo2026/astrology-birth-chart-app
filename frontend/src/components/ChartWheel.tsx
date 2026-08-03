@@ -1,13 +1,35 @@
-import { useMemo } from "react";
+import { RefObject, useMemo } from "react";
+import { useSiteTheme } from "@/components/SiteThemeProvider";
+import { chartAspectColorMap, chartPlanetFontStack, chartSignFontStack } from "@/lib/siteTheme";
+import { getChartObjectGlyph } from "@/lib/chartObjectGlyphs";
+import { filterVisibleAspects, filterVisiblePlanets } from "@/lib/chartPoints";
 import { ChartResponse } from "@/types/chart";
 
 type ChartPlanet = ChartResponse["chart"]["planets"][number];
+
+const EMPTY_OPTIONAL_POINTS = new Set<string>();
+
+const CHART_OVERLAY_COLOR = "#7c3aed";
+/** Place overlay glyphs outside the zodiac band (sign glyphs sit at its center). */
+const CHART_OVERLAY_BEYOND_ZODIAC = 12;
+const CHART_BASE_INNER_OFFSET = 8;
 
 interface ChartWheelProps {
   chart: ChartResponse["chart"];
   /** When set, only aspect lines of this type are drawn (links on the wheel). */
   aspectTypeFilter?: string | null;
+  /** Optional points (outer planets, nodes, etc.) enabled by the user. */
+  enabledOptionalPoints?: Set<string>;
+  /** Overlay planets (synastry partner or transiting sky) drawn in purple on this wheel. */
+  overlayPlanets?: ChartPlanet[];
+  /** Source chart for overlay angles (synastry partner). */
+  overlayChart?: ChartResponse["chart"];
+  /** Cross-chart aspects between base wheel and overlay (synastry). */
+  overlayAspects?: Array<{ base: string; overlay: string; type: string }>;
+  /** Label for overlay planets (tooltip). */
+  overlayLabel?: string;
   onPointClick?: (point: ChartPlanet) => void;
+  svgRef?: RefObject<SVGSVGElement | null>;
 }
 
 function polarToCartesian(center: number, radius: number, angle: number) {
@@ -31,13 +53,129 @@ function formatDegreeInSign(longitude: number): string {
   return `${String(degrees).padStart(2, "0")}°${String(minutes).padStart(2, "0")}'`;
 }
 
-export function ChartWheel({ chart, onPointClick, aspectTypeFilter = null }: ChartWheelProps) {
+function AspectMarker({
+  type,
+  x,
+  y,
+  color
+}: {
+  type: string;
+  x: number;
+  y: number;
+  color: string;
+}) {
+  if (type === "Conjunction") {
+    return (
+      <g pointerEvents="none">
+        <circle cx={x} cy={y} r={3.6} fill="#ffffff" stroke={color} strokeWidth={1.1} opacity={0.98} />
+        <circle cx={x} cy={y} r={1.6} fill={color} opacity={0.95} />
+      </g>
+    );
+  }
+
+  const symbol = {
+    Sextile: "✶",
+    Square: "□",
+    Trine: "△",
+    Opposition: "☍"
+  }[type] ?? "•";
+
+  return (
+    <text
+      x={x}
+      y={y + 4}
+      textAnchor="middle"
+      fontSize="11"
+      fill={color}
+      fontWeight="700"
+      stroke="#ffffff"
+      strokeWidth={2.5}
+      paintOrder="stroke fill"
+      pointerEvents="none"
+    >
+      {symbol}
+    </text>
+  );
+}
+
+function placePointsOnRing(
+  planets: ChartPlanet[],
+  displayAngle: (longitude: number) => number,
+  baseRadius: number,
+  options?: { laneOutwardOnly?: boolean }
+) {
+  const laneOutwardOnly = options?.laneOutwardOnly ?? false;
+  return [...planets]
+    .map((planet) => ({ planet, angle: displayAngle(planet.longitude) }))
+    .sort((a, b) => a.angle - b.angle)
+    .map((entry, index, arr) => {
+      const prev = arr[index - 1];
+      const next = arr[index + 1];
+      const prevGap = prev ? Math.abs(entry.angle - prev.angle) : 999;
+      const nextGap = next ? Math.abs(next.angle - entry.angle) : 999;
+      const minGap = Math.min(prevGap, nextGap);
+      const lane = index % 3;
+      const laneOffset = lane === 0 ? -9 : lane === 1 ? 0 : 9;
+      const crowdedOffset = minGap < 8 ? (laneOutwardOnly ? Math.max(0, laneOffset) : laneOffset) : 0;
+      return {
+        ...entry,
+        renderRadius: baseRadius + crowdedOffset
+      };
+    });
+}
+
+function lookupLongitude(
+  name: string,
+  chart: ChartResponse["chart"],
+  planets: ChartPlanet[]
+): number | null {
+  const planet = planets.find((point) => point.planet === name);
+  if (planet) return planet.longitude;
+  if (name === "ASC") return chart.ascendant;
+  if (name === "MC") return chart.midheaven;
+  if (name === "DC") return chart.descendant;
+  if (name === "IC") return chart.imumCoeli;
+  return null;
+}
+
+export function ChartWheel({
+  chart,
+  onPointClick,
+  aspectTypeFilter = null,
+  enabledOptionalPoints,
+  overlayPlanets,
+  overlayChart,
+  overlayAspects,
+  overlayLabel,
+  svgRef
+}: ChartWheelProps) {
+  const theme = useSiteTheme();
+  const aspectColor = useMemo(() => chartAspectColorMap(theme), [theme]);
+  const signFontFamily = useMemo(() => chartSignFontStack(theme), [theme]);
+  const planetFontFamily = useMemo(() => chartPlanetFontStack(theme), [theme]);
+  const aspectLineColor = (type: string) => aspectColor[type as keyof typeof aspectColor] ?? "#64748b";
+  const optionalSet = enabledOptionalPoints ?? EMPTY_OPTIONAL_POINTS;
+
+  const visiblePlanets = useMemo(
+    () => filterVisiblePlanets(chart.planets, optionalSet),
+    [chart.planets, optionalSet]
+  );
+
+  const visibleOverlayPlanets = useMemo(
+    () => (overlayPlanets ? filterVisiblePlanets(overlayPlanets, optionalSet) : []),
+    [overlayPlanets, optionalSet]
+  );
+
+  const overlayChartData = overlayChart ?? chart;
+
   const visibleAspects = useMemo(() => {
+    if (visibleOverlayPlanets.length > 0) return [];
+    const byVisibility = filterVisibleAspects(chart.aspects, optionalSet);
     if (aspectTypeFilter == null || aspectTypeFilter === "") {
-      return chart.aspects;
+      return byVisibility;
     }
-    return chart.aspects.filter((a) => a.type === aspectTypeFilter);
-  }, [chart.aspects, aspectTypeFilter]);
+    return byVisibility.filter((a) => a.type === aspectTypeFilter);
+  }, [chart.aspects, aspectTypeFilter, optionalSet, visibleOverlayPlanets.length]);
 
   const size = 420;
   const padding = 30;
@@ -69,43 +207,12 @@ export function ChartWheel({ chart, onPointClick, aspectTypeFilter = null }: Cha
   };
   const romanByHouse = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII"];
 
-  const labelMap: Record<string, string> = {
-    Sun: "☉",
-    Moon: "☽",
-    Mercury: "☿",
-    Venus: "♀",
-    Mars: "♂",
-    Jupiter: "♃",
-    Saturn: "♄",
-    Uranus: "♅",
-    Neptune: "♆",
-    Pluto: "♇",
-    "North Node": "☊",
-    "South Node": "☋",
-    Lilith: "⚸",
-    "Part of Fortune": "⊗"
-  };
-
-  const aspectColor: Record<string, string> = {
-    Conjunction: "#6b7280",
-    Sextile: "#2563eb",
-    Square: "#ef4444",
-    Trine: "#2563eb",
-    Opposition: "#ef4444"
-  };
-  const aspectStrokeStyle: Record<string, { strokeWidth: number; strokeDasharray?: string }> = {
-    Conjunction: { strokeWidth: 1.25 },
-    Sextile: { strokeWidth: 1.15, strokeDasharray: "2.8 2.2" },
+  const aspectStrokeStyle: Record<string, { strokeWidth: number }> = {
+    Conjunction: { strokeWidth: 1.55 },
+    Sextile: { strokeWidth: 1.15 },
     Square: { strokeWidth: 1.35 },
-    Trine: { strokeWidth: 1.15, strokeDasharray: "4 2" },
+    Trine: { strokeWidth: 1.15 },
     Opposition: { strokeWidth: 1.45 }
-  };
-  const aspectSymbol: Record<string, string> = {
-    Conjunction: "☌",
-    Sextile: "✶",
-    Square: "□",
-    Trine: "△",
-    Opposition: "☍"
   };
 
   const zodiacGlyphs = ["♈", "♉", "♊", "♋", "♌", "♍", "♎", "♏", "♐", "♑", "♒", "♓"];
@@ -124,7 +231,6 @@ export function ChartWheel({ chart, onPointClick, aspectTypeFilter = null }: Cha
     "#2563eb"
   ];
 
-  const pointsByName = new Map(chart.planets.map((point) => [point.planet, point]));
   const axisMarkers = [
     { key: "AC", longitude: chart.ascendant, color: "#f97316" },
     { key: "DC", longitude: chart.descendant, color: "#0ea5e9" },
@@ -132,30 +238,21 @@ export function ChartWheel({ chart, onPointClick, aspectTypeFilter = null }: Cha
     { key: "IC", longitude: chart.imumCoeli, color: "#10b981" }
   ];
 
-  const placedPoints = [...chart.planets]
-    .map((planet) => ({ planet, angle: displayAngle(planet.longitude) }))
-    .sort((a, b) => a.angle - b.angle)
-    .map((entry, index, arr) => {
-      const prev = arr[index - 1];
-      const next = arr[index + 1];
-      const prevGap = prev ? Math.abs(entry.angle - prev.angle) : 999;
-      const nextGap = next ? Math.abs(next.angle - entry.angle) : 999;
-      const minGap = Math.min(prevGap, nextGap);
+  const hasOverlay = visibleOverlayPlanets.length > 0;
+  const basePointRadius = hasOverlay ? pointRadius - CHART_BASE_INNER_OFFSET : pointRadius;
+  const overlayPointRadius = zodiacOuterRadius + CHART_OVERLAY_BEYOND_ZODIAC;
 
-      // When multiple points are close in longitude, push each one slightly
-      // in/out by lane to avoid overlap while keeping the same house sector.
-      const lane = index % 3;
-      const laneOffset = lane === 0 ? -9 : lane === 1 ? 0 : 9;
-      const crowdedOffset = minGap < 8 ? laneOffset : 0;
-
-      return {
-        ...entry,
-        renderRadius: pointRadius + crowdedOffset
-      };
-    });
+  const placedPoints = placePointsOnRing(visiblePlanets, displayAngle, basePointRadius);
+  const placedOverlayPoints = placePointsOnRing(
+    visibleOverlayPlanets,
+    displayAngle,
+    overlayPointRadius,
+    { laneOutwardOnly: true }
+  );
 
   return (
     <svg
+      ref={svgRef}
       viewBox={`${-padding} ${-padding} ${size + padding * 2} ${size + padding * 2}`}
       className="h-full w-full"
       preserveAspectRatio="xMidYMid meet"
@@ -252,7 +349,7 @@ export function ChartWheel({ chart, onPointClick, aspectTypeFilter = null }: Cha
             textAnchor="middle"
             fontSize="18"
             fill={zodiacColors[index]}
-            fontFamily="'Times New Roman','Noto Sans Symbols 2','Segoe UI Symbol','Symbola',serif"
+            fontFamily={signFontFamily}
           >
             {`${glyph}\uFE0E`}
           </text>
@@ -291,15 +388,15 @@ export function ChartWheel({ chart, onPointClick, aspectTypeFilter = null }: Cha
       })}
 
       {visibleAspects.map((aspect, index) => {
-        const from = pointsByName.get(aspect.between[0]);
-        const to = pointsByName.get(aspect.between[1]);
-        if (!from || !to) return null;
-        const p1 = polarToCartesian(center, aspectRadius, displayAngle(from.longitude));
-        const p2 = polarToCartesian(center, aspectRadius, displayAngle(to.longitude));
-        const sx1 = p1.x + (p2.x - p1.x) * 0.35;
-        const sy1 = p1.y + (p2.y - p1.y) * 0.35;
-        const sx2 = p1.x + (p2.x - p1.x) * 0.65;
-        const sy2 = p1.y + (p2.y - p1.y) * 0.65;
+        const fromLon = lookupLongitude(aspect.between[0], chart, visiblePlanets);
+        const toLon = lookupLongitude(aspect.between[1], chart, visiblePlanets);
+        if (fromLon == null || toLon == null) return null;
+        const p1 = polarToCartesian(center, aspectRadius, displayAngle(fromLon));
+        const p2 = polarToCartesian(center, aspectRadius, displayAngle(toLon));
+        const midX = (p1.x + p2.x) / 2;
+        const midY = (p1.y + p2.y) / 2;
+        const color = aspectLineColor(aspect.type);
+        const isConjunction = aspect.type === "Conjunction";
         return (
           <g key={`${aspect.between[0]}-${aspect.between[1]}-${index}`}>
             <line
@@ -307,17 +404,53 @@ export function ChartWheel({ chart, onPointClick, aspectTypeFilter = null }: Cha
               y1={p1.y}
               x2={p2.x}
               y2={p2.y}
-              stroke={aspectColor[aspect.type] ?? "#64748b"}
+              stroke={color}
               strokeWidth={aspectStrokeStyle[aspect.type]?.strokeWidth ?? 1.05}
-              strokeDasharray={aspectStrokeStyle[aspect.type]?.strokeDasharray}
-              opacity="0.88"
+              opacity={isConjunction ? 0.95 : 0.88}
             />
-            <text x={sx1} y={sy1 + 4} textAnchor="middle" fontSize="10.5" fill={aspectColor[aspect.type] ?? "#64748b"} fontWeight="700">
-              {aspectSymbol[aspect.type] ?? "•"}
-            </text>
-            <text x={sx2} y={sy2 + 4} textAnchor="middle" fontSize="10.5" fill={aspectColor[aspect.type] ?? "#64748b"} fontWeight="700">
-              {aspectSymbol[aspect.type] ?? "•"}
-            </text>
+            {isConjunction ? (
+              <AspectMarker type={aspect.type} x={midX} y={midY} color={color} />
+            ) : (
+              <>
+                <AspectMarker type={aspect.type} x={p1.x + (p2.x - p1.x) * 0.35} y={p1.y + (p2.y - p1.y) * 0.35} color={color} />
+                <AspectMarker type={aspect.type} x={p1.x + (p2.x - p1.x) * 0.65} y={p1.y + (p2.y - p1.y) * 0.65} color={color} />
+              </>
+            )}
+          </g>
+        );
+      })}
+
+      {overlayAspects?.map((aspect, index) => {
+        const baseLon = lookupLongitude(aspect.base, chart, visiblePlanets);
+        const overlayLon = lookupLongitude(aspect.overlay, overlayChartData, visibleOverlayPlanets);
+        if (baseLon == null || overlayLon == null) return null;
+        if (aspectTypeFilter && aspect.type !== aspectTypeFilter) return null;
+
+        const basePlaced = placedPoints.find((p) => p.planet.planet === aspect.base);
+        const overlayPlaced = placedOverlayPoints.find((p) => p.planet.planet === aspect.overlay);
+        const basePoint = polarToCartesian(
+          center,
+          basePlaced?.renderRadius ?? basePointRadius,
+          displayAngle(baseLon)
+        );
+        const overlayPoint = polarToCartesian(
+          center,
+          overlayPlaced?.renderRadius ?? overlayPointRadius,
+          displayAngle(overlayLon)
+        );
+        const color = aspectLineColor(aspect.type);
+        return (
+          <g key={`overlay-aspect-${aspect.base}-${aspect.overlay}-${aspect.type}-${index}`}>
+            <line
+              x1={basePoint.x}
+              y1={basePoint.y}
+              x2={overlayPoint.x}
+              y2={overlayPoint.y}
+              stroke={color}
+              strokeWidth={1}
+              opacity={0.55}
+              strokeDasharray="3 4"
+            />
           </g>
         );
       })}
@@ -358,10 +491,33 @@ export function ChartWheel({ chart, onPointClick, aspectTypeFilter = null }: Cha
               fill={color}
               fontWeight="500"
               opacity="0.95"
-              fontFamily="'Noto Sans Symbols 2','Segoe UI Symbol','Apple Symbols','Symbola',serif"
+              fontFamily={planetFontFamily}
               pointerEvents="none"
             >
-              {labelMap[planet.planet] ?? planet.planet.slice(0, 2)}
+              {getChartObjectGlyph(planet.planet)}
+            </text>
+          </g>
+        );
+      })}
+
+      {placedOverlayPoints.map(({ planet, renderRadius }) => {
+        const point = polarToCartesian(center, renderRadius, displayAngle(planet.longitude));
+        const titlePrefix = overlayLabel ? `${overlayLabel}: ` : "";
+        return (
+          <g key={`overlay-${planet.planet}`}>
+            <title>{`${titlePrefix}${planet.planet} in ${planet.sign}`}</title>
+            <text
+              x={point.x}
+              y={point.y + 4}
+              textAnchor="middle"
+              fontSize="13.5"
+              fill={CHART_OVERLAY_COLOR}
+              fontWeight="600"
+              opacity="0.92"
+              fontFamily={planetFontFamily}
+              pointerEvents="none"
+            >
+              {getChartObjectGlyph(planet.planet)}
             </text>
           </g>
         );

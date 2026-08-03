@@ -1,12 +1,11 @@
-import bcrypt from "bcryptjs";
 import express from "express";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { config } from "./config";
 import { connectDatabase, isDatabaseReady } from "./db";
-import { requireAdminAuth } from "./middleware/auth";
-import { backgroundUpload, logoUpload } from "./middleware/logoUpload";
-import { AdminUserModel } from "./models/AdminUser";
+import { requireAdminAuth, AuthRequest } from "./middleware/auth";
+import { requireAdminPermission } from "./middleware/adminPermissions";
+import { backgroundUpload, logoUpload, paypalQrUpload, vietqrUpload } from "./middleware/logoUpload";
 import { MeaningModel } from "./models/Meaning";
 import {
   getPaymentSettingsFromDb,
@@ -24,9 +23,16 @@ import {
   type ThemeSettingsPayload
 } from "./services/themeSettingsStore";
 import { generateNatalChart } from "./services/chartService";
-import { ensureDefaultAdminUser } from "./services/adminService";
-import { generateLicenseKey, generateLicensePin, redeemLicenseAndCreateAdmin } from "./services/licenseService";
-import { LicenseModel } from "./models/License";
+import { calculateNatalTransits } from "./services/transitService";
+import { calculateSynastry } from "./services/synastryService";
+import { ensureDefaultAdminUser, ensureDefaultLocalAdminUser, countAdminUsers, createAdminUser, deleteAdminUser, getAdminProfileById, listAdminUsers, updateAdminUserAccess, verifyAdminCredentials } from "./services/adminService";
+import {
+  ADMIN_ROLES,
+  MEMBER_ASSIGNABLE_PERMISSIONS,
+  effectivePermissions,
+  sanitizeMemberPermissions,
+  type AdminPermission
+} from "./types/adminRoles";
 import {
   createLocalMeaning,
   deleteLocalMeaning,
@@ -40,11 +46,21 @@ import {
   getVietQrSession,
   listPendingVietQrSessions,
   markVietQrSessionPaid,
-  matchAndPayVietQrTransfer
+  matchAndPayVietQrTransfer,
+  extractWebhookTransfers
 } from "./services/vietqrPaymentStore";
+import {
+  buildChartInterpretationExport,
+  buildExportFilename,
+  formatChartInterpretationPdf
+} from "./services/chartInterpretationExport";
 
 const router = express.Router();
 const ASPECT_ACCESS_SCOPE = "aspect_meanings";
+
+function adminPerm(...permissions: AdminPermission[]) {
+  return [requireAdminAuth, requireAdminPermission(...permissions)];
+}
 
 const chartInputSchema = z.object({
   date: z.string().min(1),
@@ -102,7 +118,14 @@ const themeSettingsBodySchema = z.object({
   fontUi: z.string().optional(),
   fontLink: z.string().optional(),
   fontWarning: z.string().optional(),
-  fontCode: z.string().optional()
+  fontCode: z.string().optional(),
+  aspectColorConjunction: z.string().optional(),
+  aspectColorSextile: z.string().optional(),
+  aspectColorSquare: z.string().optional(),
+  aspectColorTrine: z.string().optional(),
+  aspectColorOpposition: z.string().optional(),
+  fontChartSign: z.string().optional(),
+  fontChartPlanet: z.string().optional()
 });
 
 async function loadPaymentOverrides(): Promise<PaymentSettingsPayload> {
@@ -211,17 +234,41 @@ router.get("/theme-settings", async (_req, res) => {
 });
 
 const adminSetupSchema = z.object({
-  licenseKey: z.string().min(8, "License key is required"),
   email: z.string().email(),
   password: z.string().min(6, "Password must be at least 6 characters")
 });
 
-router.get("/auth/setup-status", (_req, res) => {
+const memberPermissionSchema = z.enum(
+  MEMBER_ASSIGNABLE_PERMISSIONS as unknown as [AdminPermission, ...AdminPermission[]]
+);
+
+const adminUserCreateSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(6, "Password must be at least 6 characters"),
+  role: z.enum(ADMIN_ROLES).optional().default("member"),
+  permissions: z.array(memberPermissionSchema).optional().default([])
+});
+
+const adminUserAccessSchema = z.object({
+  role: z.enum(ADMIN_ROLES),
+  permissions: z.array(memberPermissionSchema).optional().default([])
+});
+
+router.get("/auth/setup-status", async (_req, res) => {
+  const databaseReady = isDatabaseReady();
+  let hasAdminUsers = false;
+  try {
+    hasAdminUsers = (await countAdminUsers()) > 0;
+  } catch {
+    hasAdminUsers = false;
+  }
   res.json({
-    databaseReady: isDatabaseReady(),
-    message: isDatabaseReady()
-      ? "License setup is available."
-      : "MongoDB must be connected to redeem a license (no local fallback for licensed admins)."
+    databaseReady,
+    hasAdminUsers,
+    setupAvailable: !hasAdminUsers,
+    message: hasAdminUsers
+      ? "Sign in with an existing admin account."
+      : "First admin setup is available."
   });
 });
 
@@ -232,24 +279,25 @@ router.post("/auth/setup", async (req, res) => {
     return;
   }
 
-  const dbReady = await ensureDatabase(res);
-  if (!dbReady) {
-    res.status(503).json({
-      error: "Database unavailable. License activation requires MongoDB. Try again after the database is running."
-    });
-    return;
-  }
-
   try {
-    const { adminId } = await redeemLicenseAndCreateAdmin(parsed.data);
-    const token = jwt.sign({ sub: adminId, role: "admin" }, config.jwtSecret, { expiresIn: "8h" });
-    res.status(201).json({ token, message: "Admin account created. You are logged in." });
-  } catch (err) {
-    const code = err instanceof Error ? err.message : "";
-    if (code === "INVALID_OR_USED_LICENSE") {
-      res.status(400).json({ error: "Invalid license key or it has already been used." });
+    const existingCount = await countAdminUsers();
+    if (existingCount > 0) {
+      res.status(403).json({
+        error: "An admin account already exists. Sign in or ask an existing admin to create your account."
+      });
       return;
     }
+
+    const created = await createAdminUser(parsed.data.email, parsed.data.password, "admin", []);
+    const token = jwt.sign({ sub: created.id, role: "admin" }, config.jwtSecret, { expiresIn: "8h" });
+    res.status(201).json({
+      token,
+      role: "admin",
+      permissions: effectivePermissions("admin", []),
+      message: "Admin account created. You are logged in."
+    });
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "";
     if (code === "EMAIL_IN_USE") {
       res.status(409).json({ error: "An admin with this email already exists." });
       return;
@@ -268,39 +316,29 @@ router.post("/auth/login", async (req, res) => {
   }
 
   const email = parsed.data.email.toLowerCase();
-  const dbReady = await ensureDatabase(res);
-  const envAdminMatch = email === config.adminEmail.toLowerCase() && parsed.data.password === config.adminPassword;
+  await ensureDatabase(res);
 
-  let valid = false;
-  let subject = "local-admin";
-  if (dbReady) {
-    const admin = await AdminUserModel.findOne({ email });
-    if (admin) {
-      valid = await bcrypt.compare(parsed.data.password, admin.passwordHash);
-      subject = String(admin._id);
-    } else if (envAdminMatch) {
-      /** Env bootstrap admin still works if no matching AdminUser row (e.g. DB reset). */
-      valid = true;
-      subject = "local-admin";
-    }
-  } else {
-    valid = envAdminMatch;
-    if (!valid) {
-      res.status(503).json({
-        error:
-          "Database is offline, so only ADMIN_EMAIL/ADMIN_PASSWORD can sign in right now. Start MongoDB to sign in with created users."
-      });
-      return;
-    }
-  }
-
+  const { valid, subject, role, permissions } = await verifyAdminCredentials(email, parsed.data.password);
   if (!valid) {
     res.status(401).json({ error: "Invalid email/password" });
     return;
   }
 
-  const token = jwt.sign({ sub: subject, role: "admin" }, config.jwtSecret, { expiresIn: "8h" });
-  res.json({ token });
+  const token = jwt.sign({ sub: subject, role }, config.jwtSecret, { expiresIn: "8h" });
+  res.json({ token, role, permissions });
+});
+
+router.get("/auth/me", requireAdminAuth, async (req: AuthRequest, res) => {
+  if (!req.adminId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const profile = await getAdminProfileById(req.adminId);
+  if (!profile) {
+    res.status(404).json({ error: "Admin user not found." });
+    return;
+  }
+  res.json(profile);
 });
 
 router.post("/generate-chart", async (req, res) => {
@@ -315,6 +353,129 @@ router.post("/generate-chart", async (req, res) => {
     res.json({ chart });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to generate chart.";
+    res.status(400).json({ error: message });
+  }
+});
+
+const transitInputSchema = chartInputSchema.extend({
+  transitDate: z.string().min(1),
+  transitTime: z.string().min(1),
+  transitTimezone: z.string().min(1).optional(),
+  transitCity: z.string().min(1).optional(),
+  transitCountry: z.string().min(1).optional(),
+  transitLatitude: z.number().optional(),
+  transitLongitude: z.number().optional()
+});
+
+router.post("/transits", async (req, res) => {
+  const parsed = transitInputSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
+    return;
+  }
+
+  const { transitDate, transitTime, transitTimezone, transitCity, transitCountry, transitLatitude, transitLongitude, ...natal } =
+    parsed.data;
+
+  try {
+    const result = calculateNatalTransits({
+      natal,
+      transitDate,
+      transitTime,
+      transitTimezone,
+      transitCity,
+      transitCountry,
+      transitLatitude,
+      transitLongitude
+    });
+    res.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to calculate transits.";
+    res.status(400).json({ error: message });
+  }
+});
+
+const synastryPersonSchema = chartInputSchema.extend({
+  label: z.string().trim().min(1).max(40).optional()
+});
+
+const synastryInputSchema = z.object({
+  personA: synastryPersonSchema,
+  personB: synastryPersonSchema
+});
+
+router.post("/synastry", async (req, res) => {
+  const parsed = synastryInputSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const result = calculateSynastry(parsed.data);
+    res.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to calculate synastry.";
+    res.status(400).json({ error: message });
+  }
+});
+
+const chartExportSchema = chartInputSchema.extend({
+  chartImage: z.string().optional()
+});
+
+async function sendChartInterpretationPdf(
+  res: express.Response,
+  chartInput: z.infer<typeof chartInputSchema>,
+  options: { chartImage?: string; includeAspects: boolean }
+): Promise<void> {
+  const chart = generateNatalChart(chartInput);
+  const dbReady = await ensureDatabase(res);
+  const exportData = await buildChartInterpretationExport(chart, dbReady, {
+    includeAspects: options.includeAspects
+  });
+  const filename = buildExportFilename(chart.birth.date);
+  const pdfBuffer = await formatChartInterpretationPdf(exportData, options.chartImage);
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.send(pdfBuffer);
+}
+
+router.post("/charts/export-interpretations-pdf", async (req, res) => {
+  const schema = chartExportSchema.extend({
+    aspectAccessToken: z.string().optional()
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
+    return;
+  }
+
+  const { chartImage, aspectAccessToken, ...chartInput } = parsed.data;
+  const includeAspects = hasAspectAccess(aspectAccessToken);
+
+  try {
+    await sendChartInterpretationPdf(res, chartInput, { chartImage, includeAspects });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to export chart interpretations.";
+    res.status(400).json({ error: message });
+  }
+});
+
+router.post("/cms/charts/export-interpretations", ...adminPerm("preview:access"), async (req, res) => {
+  const parsed = chartExportSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
+    return;
+  }
+
+  const { chartImage, ...chartInput } = parsed.data;
+
+  try {
+    await sendChartInterpretationPdf(res, chartInput, { chartImage, includeAspects: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to export chart interpretations.";
     res.status(400).json({ error: message });
   }
 });
@@ -334,7 +495,8 @@ router.get("/payments/aspect/options", async (_req, res) => {
       qrImageUrl,
       instructionsVi: overrides.vietqrInstructionsVi.trim(),
       instructionsEn: overrides.vietqrInstructionsEn.trim(),
-      sessionTtlMinutes: config.vietQrSessionTtlMinutes
+      sessionTtlMinutes: config.vietQrSessionTtlMinutes,
+      webhookConfigured: Boolean(config.vietQrWebhookApiKey.trim())
     },
     paypal: {
       amount: prices.usd,
@@ -393,8 +555,14 @@ router.get("/payments/aspect/vietqr/status", async (req, res) => {
 function verifyVietQrWebhookAuth(req: express.Request): boolean {
   const expected = config.vietQrWebhookApiKey.trim();
   if (!expected) return false;
-  const authHeader = typeof req.headers.authorization === "string" ? req.headers.authorization : "";
-  if (authHeader === `Apikey ${expected}` || authHeader === `Bearer ${expected}`) return true;
+  const authHeader = typeof req.headers.authorization === "string" ? req.headers.authorization.trim() : "";
+  if (
+    authHeader === `Apikey ${expected}` ||
+    authHeader.toLowerCase() === `apikey ${expected.toLowerCase()}` ||
+    authHeader === `Bearer ${expected}`
+  ) {
+    return true;
+  }
   const secureToken = req.headers["secure-token"];
   if (typeof secureToken === "string" && secureToken === expected) return true;
   const apiKey = req.headers["x-api-key"];
@@ -414,22 +582,29 @@ router.post("/payments/aspect/vietqr/webhook", async (req, res) => {
     return;
   }
 
-  const transfer = extractWebhookTransfer(req.body);
-  if (!transfer) {
+  const transfers = extractWebhookTransfers(req.body);
+  if (transfers.length === 0) {
     res.status(400).json({ error: "Unrecognized webhook payload" });
     return;
   }
 
-  const paid = await matchAndPayVietQrTransfer({
-    description: transfer.description,
-    amount: transfer.amount,
-    createAccessToken: createAspectAccessToken
-  });
-  if (!paid) {
-    res.status(202).json({ matched: false });
-    return;
+  for (const item of transfers) {
+    const paid = await matchAndPayVietQrTransfer({
+      description: item.description,
+      amount: item.amount,
+      createAccessToken: createAspectAccessToken
+    });
+    if (paid) {
+      res.json({ matched: true, sessionId: paid.sessionId });
+      return;
+    }
   }
-  res.json({ matched: true, sessionId: paid.sessionId });
+
+  console.warn(
+    "[vietqr-webhook] no pending session matched",
+    JSON.stringify({ transfers, sample: transfers[0] ?? null }).slice(0, 500)
+  );
+  res.status(202).json({ matched: false });
 });
 
 router.get("/payments/aspect/paypal/start", async (_req, res) => {
@@ -542,7 +717,7 @@ router.get("/meanings/public", async (req, res) => {
   res.json(aspectUnlocked ? items : items.filter((item) => item.category !== "aspect"));
 });
 
-router.get("/cms/meanings", requireAdminAuth, async (req, res) => {
+router.get("/cms/meanings", ...adminPerm("cms:read"), async (req, res) => {
   const dbReady = await ensureDatabase(res);
   const category = typeof req.query.category === "string" ? req.query.category : undefined;
   if (dbReady) {
@@ -556,7 +731,7 @@ router.get("/cms/meanings", requireAdminAuth, async (req, res) => {
   res.json(items);
 });
 
-router.post("/cms/meanings", requireAdminAuth, async (req, res) => {
+router.post("/cms/meanings", ...adminPerm("cms:write"), async (req, res) => {
   const dbReady = await ensureDatabase(res);
   const schema = z.object({
     category: z.enum(["planet_sign", "planet_house", "aspect", "house", "house_sign"]),
@@ -585,7 +760,7 @@ router.post("/cms/meanings", requireAdminAuth, async (req, res) => {
   res.status(201).json(created);
 });
 
-router.put("/cms/meanings/:id", requireAdminAuth, async (req, res) => {
+router.put("/cms/meanings/:id", ...adminPerm("cms:write"), async (req, res) => {
   const dbReady = await ensureDatabase(res);
   const schema = z.object({
     category: z.enum(["planet_sign", "planet_house", "aspect", "house", "house_sign"]),
@@ -622,7 +797,7 @@ router.put("/cms/meanings/:id", requireAdminAuth, async (req, res) => {
   res.json(updated);
 });
 
-router.delete("/cms/meanings/:id", requireAdminAuth, async (req, res) => {
+router.delete("/cms/meanings/:id", ...adminPerm("cms:write"), async (req, res) => {
   const dbReady = await ensureDatabase(res);
   if (dbReady) {
     const deleted = await MeaningModel.findByIdAndDelete(req.params.id);
@@ -642,7 +817,7 @@ router.delete("/cms/meanings/:id", requireAdminAuth, async (req, res) => {
   res.status(204).send();
 });
 
-router.get("/cms/export", requireAdminAuth, async (_req, res) => {
+router.get("/cms/export", ...adminPerm("backup:manage"), async (_req, res) => {
   const dbReady = await ensureDatabase(res);
   if (dbReady) {
     const meanings = await MeaningModel.find().sort({ category: 1, key: 1 });
@@ -657,7 +832,7 @@ router.get("/cms/export", requireAdminAuth, async (_req, res) => {
   res.json({ exportedAt: new Date().toISOString(), meanings });
 });
 
-router.get("/cms/backup", requireAdminAuth, async (_req, res) => {
+router.get("/cms/backup", ...adminPerm("backup:manage"), async (_req, res) => {
   const dbReady = await ensureDatabase(res);
   const exportedAt = new Date().toISOString();
   const paymentSettings = await loadPaymentOverrides();
@@ -685,7 +860,7 @@ router.get("/cms/backup", requireAdminAuth, async (_req, res) => {
   });
 });
 
-router.post("/cms/import", requireAdminAuth, async (req, res) => {
+router.post("/cms/import", ...adminPerm("backup:manage"), async (req, res) => {
   const dbReady = await ensureDatabase(res);
   const schema = z.object({
     meanings: z.array(
@@ -718,7 +893,7 @@ router.post("/cms/import", requireAdminAuth, async (req, res) => {
   res.json({ imported: parsed.data.meanings.length });
 });
 
-router.post("/cms/backup/import", requireAdminAuth, async (req, res) => {
+router.post("/cms/backup/import", ...adminPerm("backup:manage"), async (req, res) => {
   const dbReady = await ensureDatabase(res);
   const schema = z.object({
     meanings: z.array(
@@ -760,7 +935,14 @@ router.post("/cms/backup/import", requireAdminAuth, async (req, res) => {
         fontUi: z.string().optional(),
         fontLink: z.string().optional(),
         fontWarning: z.string().optional(),
-        fontCode: z.string().optional()
+        fontCode: z.string().optional(),
+        aspectColorConjunction: z.string().optional(),
+        aspectColorSextile: z.string().optional(),
+        aspectColorSquare: z.string().optional(),
+        aspectColorTrine: z.string().optional(),
+        aspectColorOpposition: z.string().optional(),
+        fontChartSign: z.string().optional(),
+        fontChartPlanet: z.string().optional()
       })
       .optional()
   });
@@ -813,7 +995,7 @@ router.post("/cms/backup/import", requireAdminAuth, async (req, res) => {
   });
 });
 
-router.get("/cms/payment-settings", requireAdminAuth, async (_req, res) => {
+router.get("/cms/payment-settings", ...adminPerm("payment:manage"), async (_req, res) => {
   await ensureDatabase(res);
   const overrides = await loadPaymentOverrides();
   res.json({
@@ -831,7 +1013,7 @@ router.get("/cms/payment-settings", requireAdminAuth, async (_req, res) => {
   });
 });
 
-router.put("/cms/payment-settings", requireAdminAuth, async (req, res) => {
+router.put("/cms/payment-settings", ...adminPerm("payment:manage"), async (req, res) => {
   const parsed = paymentSettingsBodySchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.flatten() });
@@ -856,12 +1038,84 @@ router.put("/cms/payment-settings", requireAdminAuth, async (req, res) => {
   res.json(payload);
 });
 
-router.get("/cms/payments/vietqr/pending", requireAdminAuth, async (_req, res) => {
+router.post(
+  "/cms/upload-vietqr",
+  ...adminPerm("payment:manage"),
+  (req, res, next) => {
+    vietqrUpload.single("vietqr")(req, res, (err: unknown) => {
+      if (err) {
+        const msg = err instanceof Error ? err.message : "Upload failed";
+        res.status(400).json({ error: msg });
+        return;
+      }
+      next();
+    });
+  },
+  async (req, res) => {
+    const file = req.file;
+    if (!file) {
+      res.status(400).json({ error: 'No file received — use multipart field name "vietqr"' });
+      return;
+    }
+    const vietqrImageUrl = `/api/uploads/${file.filename}`;
+    const dbReady = await ensureDatabase(res);
+    const current = await loadPaymentOverrides();
+    const payload: PaymentSettingsPayload = {
+      ...current,
+      vietqrImageUrl
+    };
+    if (dbReady) {
+      const saved = await upsertPaymentSettingsDb(payload);
+      res.status(201).json({ vietqrImageUrl, paymentSettings: saved });
+      return;
+    }
+    await writeLocalPaymentSettings(payload);
+    res.status(201).json({ vietqrImageUrl, paymentSettings: payload });
+  }
+);
+
+router.post(
+  "/cms/upload-paypal-qr",
+  ...adminPerm("payment:manage"),
+  (req, res, next) => {
+    paypalQrUpload.single("paypalQr")(req, res, (err: unknown) => {
+      if (err) {
+        const msg = err instanceof Error ? err.message : "Upload failed";
+        res.status(400).json({ error: msg });
+        return;
+      }
+      next();
+    });
+  },
+  async (req, res) => {
+    const file = req.file;
+    if (!file) {
+      res.status(400).json({ error: 'No file received — use multipart field name "paypalQr"' });
+      return;
+    }
+    const paypalQrImageUrl = `/api/uploads/${file.filename}`;
+    const dbReady = await ensureDatabase(res);
+    const current = await loadPaymentOverrides();
+    const payload: PaymentSettingsPayload = {
+      ...current,
+      paypalQrImageUrl
+    };
+    if (dbReady) {
+      const saved = await upsertPaymentSettingsDb(payload);
+      res.status(201).json({ paypalQrImageUrl, paymentSettings: saved });
+      return;
+    }
+    await writeLocalPaymentSettings(payload);
+    res.status(201).json({ paypalQrImageUrl, paymentSettings: payload });
+  }
+);
+
+router.get("/cms/payments/vietqr/pending", ...adminPerm("payment:manage"), async (_req, res) => {
   const pending = await listPendingVietQrSessions();
   res.json({ pending });
 });
 
-router.post("/cms/payments/vietqr/:sessionId/confirm", requireAdminAuth, async (req, res) => {
+router.post("/cms/payments/vietqr/:sessionId/confirm", ...adminPerm("payment:manage"), async (req, res) => {
   const sessionId = typeof req.params.sessionId === "string" ? req.params.sessionId : "";
   if (!sessionId) {
     res.status(400).json({ error: "sessionId is required" });
@@ -885,13 +1139,13 @@ router.post("/cms/payments/vietqr/:sessionId/confirm", requireAdminAuth, async (
   res.json({ status: "paid", accessToken: paid?.accessToken ?? accessToken });
 });
 
-router.get("/cms/theme-settings", requireAdminAuth, async (_req, res) => {
+router.get("/cms/theme-settings", ...adminPerm("theme:read"), async (_req, res) => {
   await ensureDatabase(res);
   const theme = await loadThemeOverrides();
   res.json(theme);
 });
 
-router.put("/cms/theme-settings", requireAdminAuth, async (req, res) => {
+router.put("/cms/theme-settings", ...adminPerm("theme:write"), async (req, res) => {
   const parsed = themeSettingsBodySchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.flatten() });
@@ -913,7 +1167,7 @@ router.put("/cms/theme-settings", requireAdminAuth, async (req, res) => {
 
 router.post(
   "/cms/upload-logo",
-  requireAdminAuth,
+  ...adminPerm("theme:write"),
   (req, res, next) => {
     logoUpload.single("logo")(req, res, (err: unknown) => {
       if (err) {
@@ -947,7 +1201,7 @@ router.post(
 
 router.post(
   "/cms/upload-background",
-  requireAdminAuth,
+  ...adminPerm("theme:write"),
   (req, res, next) => {
     backgroundUpload.single("background")(req, res, (err: unknown) => {
       if (err) {
@@ -979,91 +1233,109 @@ router.post(
   }
 );
 
-const issueLicensesSchema = z.object({
-  count: z.number().int().min(1).max(100).optional().default(1)
+router.get("/cms/admin-users", ...adminPerm("admin:manage"), async (_req, res) => {
+  try {
+    const users = await listAdminUsers();
+    res.json({ users, storage: isDatabaseReady() ? "mongodb" : "local" });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to list admin users.";
+    res.status(500).json({ error: message });
+  }
 });
 
-router.post("/cms/licenses", requireAdminAuth, async (req, res) => {
-  const dbReady = await ensureDatabase(res);
-  if (!dbReady) {
-    res.status(503).json({ error: "Database required to issue licenses." });
-    return;
-  }
-  const parsed = issueLicensesSchema.safeParse(req.body ?? {});
+router.post("/cms/admin-users", ...adminPerm("admin:manage"), async (req, res) => {
+  const parsed = adminUserCreateSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.flatten() });
     return;
   }
 
-  const issued: Array<{ id: string; licenseKey: string; licensePin: string; issuedAt: string }> = [];
-  for (let i = 0; i < parsed.data.count; i++) {
-    let inserted = false;
-    for (let attempt = 0; attempt < 12 && !inserted; attempt += 1) {
-      try {
-        const licenseKey = generateLicenseKey();
-        const licensePin = generateLicensePin();
-        const doc = await LicenseModel.create({ licenseKey, licensePin, isUsed: false });
-        const created = doc.createdAt ?? new Date();
-        issued.push({
-          id: String(doc._id),
-          licenseKey: doc.licenseKey,
-          licensePin: doc.licensePin,
-          issuedAt: created instanceof Date ? created.toISOString() : new Date(created).toISOString()
-        });
-        inserted = true;
-      } catch (err: unknown) {
-        const code = (err as { code?: number })?.code;
-        if (code === 11000) {
-          continue;
-        }
-        const message = err instanceof Error ? err.message : "Failed to create license.";
-        res.status(500).json({ error: message });
-        return;
-      }
-    }
-    if (!inserted) {
-      res.status(500).json({ error: "Could not generate a unique license key." });
+  try {
+    const permissions = sanitizeMemberPermissions(parsed.data.permissions);
+    const user = await createAdminUser(
+      parsed.data.email,
+      parsed.data.password,
+      parsed.data.role,
+      permissions
+    );
+    res.status(201).json({ user, storage: isDatabaseReady() ? "mongodb" : "local" });
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "";
+    if (code === "EMAIL_IN_USE") {
+      res.status(409).json({ error: "An admin with this email already exists." });
       return;
     }
+    const message = err instanceof Error ? err.message : "Failed to create admin user.";
+    res.status(500).json({ error: message });
   }
-
-  res.status(201).json({ licenses: issued });
 });
 
-router.get("/cms/licenses", requireAdminAuth, async (_req, res) => {
-  const dbReady = await ensureDatabase(res);
-  if (!dbReady) {
-    res.status(503).json({ error: "Database required." });
+router.patch("/cms/admin-users/:id/access", ...adminPerm("admin:manage"), async (req, res) => {
+  const id = typeof req.params.id === "string" ? req.params.id.trim() : "";
+  if (!id) {
+    res.status(400).json({ error: "Admin user id is required." });
+    return;
+  }
+  const parsed = adminUserAccessSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
     return;
   }
 
-  const rows = await LicenseModel.find()
-    .sort({ createdAt: -1 })
-    .limit(500)
-    .populate("adminUserId", "email")
-    .lean();
+  try {
+    const permissions = sanitizeMemberPermissions(parsed.data.permissions);
+    await updateAdminUserAccess(id, parsed.data.role, permissions);
+    res.json({
+      ok: true,
+      role: parsed.data.role,
+      permissions: effectivePermissions(parsed.data.role, permissions)
+    });
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "";
+    if (code === "LAST_ADMIN") {
+      res.status(400).json({ error: "Cannot change role of the last admin." });
+      return;
+    }
+    if (code === "NOT_FOUND") {
+      res.status(404).json({ error: "Admin user not found." });
+      return;
+    }
+    const message = err instanceof Error ? err.message : "Failed to update admin access.";
+    res.status(500).json({ error: message });
+  }
+});
 
-  res.json({
-    licenses: rows.map((row: Record<string, unknown>) => {
-      const populated = row.adminUserId as { email?: string } | null | undefined;
-      const created = row.createdAt;
-      const issuedAt =
-        created instanceof Date
-          ? created.toISOString()
-          : typeof created === "string" || typeof created === "number"
-            ? new Date(created).toISOString()
-            : null;
-      return {
-        id: String(row._id),
-        licenseKey: row.licenseKey,
-        licensePin: typeof row.licensePin === "string" ? row.licensePin : "",
-        issuedAt,
-        isUsed: row.isUsed,
-        usedAt: row.usedAt,
-        adminEmail: populated && typeof populated === "object" ? populated.email ?? null : null
-      };
-    })
-  });
+router.delete("/cms/admin-users/:id", ...adminPerm("admin:manage"), async (req, res) => {
+  const id = typeof req.params.id === "string" ? req.params.id.trim() : "";
+  if (!id) {
+    res.status(400).json({ error: "Admin user id is required." });
+    return;
+  }
+
+  try {
+    await deleteAdminUser(id);
+    res.json({ ok: true });
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "";
+    if (code === "ADMIN_PROTECTED") {
+      res.status(400).json({ error: "Admin accounts cannot be deleted." });
+      return;
+    }
+    if (code === "LAST_ADMIN") {
+      res.status(400).json({ error: "Cannot delete the last admin account." });
+      return;
+    }
+    if (code === "LAST_SUPER_ADMIN") {
+      res.status(400).json({ error: "Cannot delete the last super admin account." });
+      return;
+    }
+    if (code === "NOT_FOUND") {
+      res.status(404).json({ error: "Admin user not found." });
+      return;
+    }
+    const message = err instanceof Error ? err.message : "Failed to delete admin user.";
+    res.status(500).json({ error: message });
+  }
 });
 
 export default router;

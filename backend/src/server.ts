@@ -4,12 +4,14 @@ import { config } from "./config";
 import { connectDatabase } from "./db";
 import { ensureUploadsDir, UPLOADS_DIR } from "./middleware/logoUpload";
 import router from "./routes";
-import { ensureDefaultAdminUser } from "./services/adminService";
+import { ensureDefaultAdminUser, ensureDefaultLocalAdminUser } from "./services/adminService";
 
 async function bootstrap() {
   const dbReady = await connectDatabase();
   if (dbReady) {
     await ensureDefaultAdminUser();
+  } else {
+    await ensureDefaultLocalAdminUser();
   }
 
   ensureUploadsDir();

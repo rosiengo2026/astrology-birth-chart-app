@@ -53,5 +53,11 @@ function buildImageUpload(prefix: string, maxBytes: number): multer.Multer {
 /** Logo and small branding assets (max 2 MB). */
 export const logoUpload = buildImageUpload("logo", 2 * 1024 * 1024);
 
+/** VietQR payment QR codes (max 2 MB). */
+export const vietqrUpload = buildImageUpload("vietqr", 2 * 1024 * 1024);
+
+/** PayPal payment QR codes (max 2 MB). */
+export const paypalQrUpload = buildImageUpload("paypal-qr", 2 * 1024 * 1024);
+
 /** Full-page background artwork (max 4 MB). */
 export const backgroundUpload = buildImageUpload("bg", 4 * 1024 * 1024);

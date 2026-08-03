@@ -28,7 +28,17 @@ export const PLANETS: Array<{ name: ChartPointName; id: number }> = [
   { name: "Pluto", id: 9 }
 ];
 
-export const EXTRA_POINTS: ChartPointName[] = ["North Node", "South Node", "Lilith", "Part of Fortune"];
+export const EXTRA_POINTS: ChartPointName[] = [
+  "North Node",
+  "South Node",
+  "Lilith",
+  "Priapus",
+  "Part of Fortune",
+  "Part of Spirit",
+  "Part of Eros",
+  "Part of Marriage",
+  "Part of Calamity"
+];
 
 export const ASPECT_DEGREES: Record<
   "Conjunction" | "Sextile" | "Square" | "Trine" | "Opposition",

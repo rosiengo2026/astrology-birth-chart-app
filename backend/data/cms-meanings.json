@@ -463,5 +463,20 @@
     },
     "createdAt": "2026-05-06T13:21:33.531Z",
     "updatedAt": "2026-05-06T13:21:33.531Z"
+  },
+  {
+    "_id": "73af0bc7-d2c0-43b0-8aa9-1af76a7b68b5",
+    "category": "planet_sign",
+    "key": "mercury_libra",
+    "title": {
+      "en": "Mercury in Libra",
+      "vi": "Sao thủy ở cung Thiên Bình"
+    },
+    "content": {
+      "en": "ảdsrfds",
+      "vi": "aggfars"
+    },
+    "createdAt": "2026-06-13T12:12:01.805Z",
+    "updatedAt": "2026-06-13T12:12:01.805Z"
   }
 ]

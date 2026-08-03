@@ -115,6 +115,20 @@ function normalizeDescription(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
+function compactAlphanumeric(value: string): string {
+  return value.replace(/[^a-z0-9]/g, "");
+}
+
+export function memoMatchesTransferDescription(description: string, memo: string): boolean {
+  const normalizedDescription = normalizeDescription(description);
+  const normalizedMemo = memo.trim().toLowerCase();
+  if (!normalizedDescription || !normalizedMemo) return false;
+  if (normalizedDescription === normalizedMemo || normalizedDescription.includes(normalizedMemo)) return true;
+  const compactDescription = compactAlphanumeric(normalizedDescription);
+  const compactMemo = compactAlphanumeric(normalizedMemo);
+  return compactMemo.length > 0 && compactDescription.includes(compactMemo);
+}
+
 function normalizeAmount(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return Math.round(value);
   if (typeof value === "string" && value.trim()) {
@@ -137,8 +151,7 @@ export async function matchAndPayVietQrTransfer(input: {
   const index = store.sessions.findIndex((session) => {
     if (session.status !== "pending") return false;
     if (session.amount !== amount) return false;
-    const memo = session.transferContent.trim().toLowerCase();
-    return description === memo || description.includes(memo);
+    return memoMatchesTransferDescription(description, session.transferContent);
   });
   if (index < 0) {
     await writeStore(store);
@@ -157,27 +170,47 @@ export async function matchAndPayVietQrTransfer(input: {
   return updated;
 }
 
-export function extractWebhookTransfer(body: unknown): { description: string; amount: number } | null {
-  if (!body || typeof body !== "object") return null;
+function extractWebhookRow(row: Record<string, unknown>): { description: string; amount: number } | null {
+  const description = normalizeDescription(
+    row.description ?? row.content ?? row.transferContent ?? row.note ?? row.code
+  );
+  const amount = normalizeAmount(row.amount ?? row.transferAmount ?? row.transactionAmount);
+  if (!description || !amount) return null;
+
+  const transferType = String(row.transferType ?? row.transfer_type ?? "in").toLowerCase();
+  if (transferType === "out" || transferType === "debit") return null;
+
+  return { description, amount };
+}
+
+/** Parse Casso, SePay, and generic bank webhook payloads. */
+export function extractWebhookTransfers(body: unknown): Array<{ description: string; amount: number }> {
+  if (!body || typeof body !== "object") return [];
   const payload = body as Record<string, unknown>;
+  const transfers: Array<{ description: string; amount: number }> = [];
 
-  if (Array.isArray(payload.data) && payload.data.length > 0) {
-    const row = payload.data[0] as Record<string, unknown>;
-    const description = normalizeDescription(row.description ?? row.content ?? row.transferContent);
-    const amount = normalizeAmount(row.amount ?? row.transferAmount);
-    if (description && amount) return { description, amount };
+  const data = payload.data;
+  if (Array.isArray(data)) {
+    data.forEach((row) => {
+      if (!row || typeof row !== "object") return;
+      const parsed = extractWebhookRow(row as Record<string, unknown>);
+      if (parsed) transfers.push(parsed);
+    });
+  } else if (data && typeof data === "object") {
+    const parsed = extractWebhookRow(data as Record<string, unknown>);
+    if (parsed) transfers.push(parsed);
   }
 
-  if (payload.transferAmount !== undefined || payload.transferContent !== undefined) {
-    const description = normalizeDescription(payload.transferContent ?? payload.content ?? payload.description);
-    const amount = normalizeAmount(payload.transferAmount ?? payload.amount);
-    if (description && amount) return { description, amount };
+  if (transfers.length === 0) {
+    const parsed = extractWebhookRow(payload);
+    if (parsed) transfers.push(parsed);
   }
 
-  const description = normalizeDescription(payload.description ?? payload.content ?? payload.transferContent);
-  const amount = normalizeAmount(payload.amount ?? payload.transferAmount);
-  if (description && amount) return { description, amount };
-  return null;
+  return transfers;
+}
+
+export function extractWebhookTransfer(body: unknown): { description: string; amount: number } | null {
+  return extractWebhookTransfers(body)[0] ?? null;
 }
 
 export async function listPendingVietQrSessions(): Promise<VietQrPaymentSession[]> {

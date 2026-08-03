@@ -1,49 +1,30 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { bi } from "@/lib/bilingual";
 import {
+  CHART_GLYPH_FONT_CHOICES,
   defaultSiteTheme,
   resolveBackgroundImageUrl,
   resolveThemeAssetUrl,
   THEME_FONT_CHOICES,
   type SiteThemeSettings
 } from "@/lib/siteTheme";
+import { BirthChartApp } from "@/components/BirthChartApp";
+import { CmsMeaningsBulkEditor } from "@/components/admin/CmsMeaningsBulkEditor";
+import {
+  ADMIN_ROLE_OPTIONS,
+  defaultMemberPermissions,
+  hasPermission,
+  MEMBER_PERMISSION_OPTIONS,
+  roleLabel,
+  toggleMemberPermission,
+  type AdminPermission,
+  type AdminRole
+} from "@/lib/adminRoles";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api";
-const MANUAL_LICENSES_STORAGE_KEY = "astrology-admin-manual-licenses";
-const POINT_KEYS = [
-  "sun",
-  "moon",
-  "mercury",
-  "venus",
-  "mars",
-  "jupiter",
-  "saturn",
-  "uranus",
-  "neptune",
-  "pluto",
-  "north_node",
-  "south_node",
-  "lilith",
-  "part_of_fortune"
-];
-const SIGN_KEYS = [
-  "aries",
-  "taurus",
-  "gemini",
-  "cancer",
-  "leo",
-  "virgo",
-  "libra",
-  "scorpio",
-  "sagittarius",
-  "capricorn",
-  "aquarius",
-  "pisces"
-];
-const ASPECT_KEYS = ["conjunction", "sextile", "square", "trine", "opposition"];
 
 function adminNoticeClass(text: string): string {
   if (!text) return "text-amber-200";
@@ -66,28 +47,6 @@ function adminNoticeClass(text: string): string {
   return "text-amber-200";
 }
 
-type Meaning = {
-  _id: string;
-  category: "planet_sign" | "planet_house" | "aspect" | "house" | "house_sign";
-  key: string;
-  title: { en: string; vi: string };
-  content: { en: string; vi: string };
-};
-
-type MeaningFormValues = {
-  category: Meaning["category"];
-  key: string;
-};
-
-type MeaningForm = {
-  category: Meaning["category"];
-  key: string;
-  titleEn: string;
-  titleVi: string;
-  contentEn: string;
-  contentVi: string;
-};
-
 function themeFontSelectOptions(current: string) {
   const base = [...THEME_FONT_CHOICES];
   if (current.trim() && !base.some((o) => o.value === current)) {
@@ -96,33 +55,27 @@ function themeFontSelectOptions(current: string) {
   return base;
 }
 
-const emptyForm: MeaningForm = {
-  category: "planet_sign",
-  key: "sun_aries",
-  titleEn: "",
-  titleVi: "",
-  contentEn: "",
-  contentVi: ""
-};
+function chartGlyphFontSelectOptions(current: string) {
+  const base = [...CHART_GLYPH_FONT_CHOICES];
+  if (current.trim() && !base.some((o) => o.value === current)) {
+    base.push({ value: current, label: `${current} (saved · đã lưu)` });
+  }
+  return base;
+}
 
 export default function AdminPage() {
   /** Must match server first paint — read localStorage in useEffect to avoid hydration mismatch. */
   const [token, setToken] = useState("");
-  const [email, setEmail] = useState("admin@example.com");
-  const [password, setPassword] = useState("admin12345");
-  const [meanings, setMeanings] = useState<Meaning[]>([]);
-  const [form, setForm] = useState(emptyForm);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [importJson, setImportJson] = useState("");
-  const [useCustomKey, setUseCustomKey] = useState(false);
   const [message, setMessage] = useState<string>("");
-  const [loading, setLoading] = useState(false);
+  const [cmsRefreshSignal, setCmsRefreshSignal] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
+  const [adminTab, setAdminTab] = useState<"manage" | "preview">("manage");
   const [importing, setImporting] = useState(false);
   const [backupBusy, setBackupBusy] = useState(false);
   const [importBackupBusy, setImportBackupBusy] = useState(false);
-  const [frontendBackupBusy, setFrontendBackupBusy] = useState(false);
-  const [frontendImportBusy, setFrontendImportBusy] = useState(false);
   const [paymentForm, setPaymentForm] = useState({
     vietqrImageUrl: "",
     vietqrInstructionsVi: "",
@@ -138,111 +91,86 @@ export default function AdminPage() {
   const [themeForm, setThemeForm] = useState<SiteThemeSettings>(defaultSiteTheme);
   const [themeMessage, setThemeMessage] = useState("");
   const [logoUploadBusy, setLogoUploadBusy] = useState(false);
+  const [vietqrUploadBusy, setVietqrUploadBusy] = useState(false);
+  const [paypalQrUploadBusy, setPaypalQrUploadBusy] = useState(false);
   const [backgroundUploadBusy, setBackgroundUploadBusy] = useState(false);
-  const [manualLicenses, setManualLicenses] = useState<
+  const [adminUsers, setAdminUsers] = useState<
     Array<{
       id: string;
-      licenseKey: string;
       email: string;
       password: string;
-      issuedAt: string | null;
-      source: "manual";
+      role: AdminRole;
+      permissions: AdminPermission[];
+      createdAt: string | null;
     }>
   >([]);
-  const [manualLicenseKeyInput, setManualLicenseKeyInput] = useState("");
-  const [manualEmailInput, setManualEmailInput] = useState("");
-  const [manualPasswordInput, setManualPasswordInput] = useState("");
-  const [manualLicenseHydrated, setManualLicenseHydrated] = useState(false);
-  const [licenseMessage, setLicenseMessage] = useState("");
+  const [adminUsersLoading, setAdminUsersLoading] = useState(false);
+  const [newAdminEmail, setNewAdminEmail] = useState("");
+  const [newAdminPassword, setNewAdminPassword] = useState("");
+  const [adminUserBusy, setAdminUserBusy] = useState(false);
+  const [adminUserMessage, setAdminUserMessage] = useState("");
+  const [newAdminRole, setNewAdminRole] = useState<AdminRole>("member");
+  const [newAdminPermissions, setNewAdminPermissions] = useState<AdminPermission[]>(defaultMemberPermissions());
+  const [adminProfile, setAdminProfile] = useState<{
+    id: string;
+    email: string;
+    role: AdminRole;
+    permissions: AdminPermission[];
+  } | null>(null);
+  const [setupAvailable, setSetupAvailable] = useState(false);
   const backendBackupInputRef = useRef<HTMLInputElement | null>(null);
-  const frontendBackupInputRef = useRef<HTMLInputElement | null>(null);
-  const latestLoadMeaningsSeq = useRef(0);
-  const lastLoadMeaningSignature = useRef("");
-
+  const vietqrFileInputRef = useRef<HTMLInputElement | null>(null);
+  const paypalQrFileInputRef = useRef<HTMLInputElement | null>(null);
   const handleUnauthorized = useCallback(() => {
     localStorage.removeItem("adminToken");
     setToken("");
-    setMeanings([]);
+    setAdminProfile(null);
     setMessage(bi("Session expired or invalid token. Please sign in again.", "Phiên hết hạn hoặc token không hợp lệ. Vui lòng đăng nhập lại."));
   }, []);
 
   const logout = useCallback(() => {
     localStorage.removeItem("adminToken");
     setToken("");
-    setMeanings([]);
+    setAdminProfile(null);
     setMessage("");
   }, []);
+
+  const can = useCallback(
+    (permission: AdminPermission) =>
+      hasPermission(adminProfile?.permissions, permission, adminProfile?.role),
+    [adminProfile?.permissions, adminProfile?.role]
+  );
+
+  const loadAdminProfile = useCallback(
+    async (currentToken = token) => {
+      if (!currentToken) return;
+      try {
+        const response = await fetch(`${API_URL}/auth/me`, {
+          headers: { Authorization: `Bearer ${currentToken}` }
+        });
+        if (response.status === 401) {
+          handleUnauthorized();
+          return;
+        }
+        if (!response.ok) return;
+        const data = (await response.json()) as {
+          id: string;
+          email: string;
+          role: AdminRole;
+          permissions: AdminPermission[];
+        };
+        setAdminProfile(data);
+      } catch {
+        /* ignore */
+      }
+    },
+    [token, handleUnauthorized]
+  );
 
   useEffect(() => {
     const stored = localStorage.getItem("adminToken");
     if (stored) setToken(stored);
   }, []);
-
-  const keyOptions = useMemo(() => {
-    if (form.category === "planet_sign") {
-      return POINT_KEYS.flatMap((point) => SIGN_KEYS.map((sign) => `${point}_${sign}`));
-    }
-    if (form.category === "planet_house") {
-      return POINT_KEYS.flatMap((point) => Array.from({ length: 12 }, (_, i) => `${point}_${i + 1}`));
-    }
-    if (form.category === "house") {
-      return Array.from({ length: 12 }, (_, i) => `house_${i + 1}`);
-    }
-    if (form.category === "house_sign") {
-      return Array.from({ length: 12 }, (_, i) => {
-        const house = i + 1;
-        return SIGN_KEYS.map((sign) => `house_${house}_${sign}`);
-      }).flat();
-    }
-    return POINT_KEYS.flatMap((left, i) =>
-      POINT_KEYS.slice(i + 1).flatMap((right) => ASPECT_KEYS.map((aspect) => `${left}_${aspect}_${right}`))
-    );
-  }, [form.category]);
-
-  const selectedMeaning = useMemo(
-    () => meanings.find((item) => item.category === form.category && item.key === form.key.trim()),
-    [meanings, form.category, form.key]
-  );
-  const displayedMeanings = useMemo(() => {
-    const key = form.key.trim();
-    if (key) {
-      return meanings.filter((item) => item.category === form.category && item.key === key);
-    }
-    return meanings.filter((item) => item.category === form.category);
-  }, [meanings, form.category, form.key]);
-
-  const applyMeaningToForm = useCallback(
-    (
-      category: Meaning["category"],
-      key: string,
-      meaning?: Meaning
-    ) => {
-      setForm((current) => {
-        const next = {
-          ...current,
-          category,
-          key,
-          titleEn: meaning?.title.en ?? "",
-          titleVi: meaning?.title.vi ?? "",
-          contentEn: meaning?.content.en ?? "",
-          contentVi: meaning?.content.vi ?? ""
-        };
-        if (
-          current.category === next.category &&
-          current.key === next.key &&
-          current.titleEn === next.titleEn &&
-          current.titleVi === next.titleVi &&
-          current.contentEn === next.contentEn &&
-          current.contentVi === next.contentVi
-        ) {
-          return current;
-        }
-        return next;
-      });
-      setEditingId(meaning?._id ?? null);
-    },
-    []
-  );
 
   const loadThemeSettings = useCallback(
     async (currentToken = token) => {
@@ -306,169 +234,241 @@ export default function AdminPage() {
     [token, handleUnauthorized]
   );
 
-  const loadMeanings = useCallback(
-    async (currentToken = token, context?: MeaningFormValues) => {
-      if (!currentToken) return false;
-      const activeCategory = context?.category ?? form.category;
-      const activeKey = (context?.key ?? form.key).trim();
-      const signature = `${currentToken}|${activeCategory}|${activeKey}`;
-      if (lastLoadMeaningSignature.current === signature) {
-        return true;
-      }
-      lastLoadMeaningSignature.current = signature;
-      const seq = ++latestLoadMeaningsSeq.current;
+  const loadAdminUsers = useCallback(
+    async (currentToken = token) => {
+      if (!currentToken) return;
+      setAdminUsersLoading(true);
       try {
-        const params = new URLSearchParams({ category: activeCategory });
-        const response = await fetch(`${API_URL}/cms/meanings?${params.toString()}`, {
+        const response = await fetch(`${API_URL}/cms/admin-users`, {
           headers: { Authorization: `Bearer ${currentToken}` }
         });
         if (response.status === 401) {
           handleUnauthorized();
-          return false;
+          return;
         }
         if (!response.ok) {
-          if (latestLoadMeaningsSeq.current === seq) {
-            lastLoadMeaningSignature.current = "";
-          }
-          return false;
+          setAdminUserMessage(bi("Could not load admin accounts.", "Không tải được danh sách tài khoản admin."));
+          return;
         }
-        const data = (await response.json()) as Meaning[];
-        if (latestLoadMeaningsSeq.current !== seq) {
-          return false;
-        }
-        setMeanings(data);
-        const matchingMeaning = data.find((item) => item.category === activeCategory && item.key === activeKey);
-        applyMeaningToForm(activeCategory, activeKey, matchingMeaning);
-        return true;
+        const data = (await response.json()) as {
+          users?: Array<{
+            id: string;
+            email: string;
+            password: string;
+            role: AdminRole;
+            permissions?: AdminPermission[];
+            createdAt: string | null;
+          }>;
+        };
+        setAdminUsers(
+          Array.isArray(data.users)
+            ? data.users.map((user) => ({
+                ...user,
+                permissions: Array.isArray(user.permissions) ? user.permissions : defaultMemberPermissions()
+              }))
+            : []
+        );
       } catch {
-        if (latestLoadMeaningsSeq.current === seq) {
-          lastLoadMeaningSignature.current = "";
-        }
-        return false;
+        setAdminUserMessage(bi("Could not load admin accounts.", "Không tải được danh sách tài khoản admin."));
+      } finally {
+        setAdminUsersLoading(false);
       }
     },
-    [token, handleUnauthorized, form.category, form.key, applyMeaningToForm]
+    [token, handleUnauthorized]
   );
 
-  async function refreshMeanings() {
+  function refreshMeanings() {
     setRefreshing(true);
-    const ok = await loadMeanings();
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    setRefreshing(false);
-    setMessage(
-      ok
-        ? bi("Refreshed latest data.", "Đã tải lại dữ liệu mới nhất.")
-        : bi("Refresh failed. Check backend/API connection.", "Tải lại thất bại. Kiểm tra kết nối API/backend.")
+    setCmsRefreshSignal((n) => n + 1);
+    setTimeout(() => {
+      setRefreshing(false);
+      setMessage(bi("Refreshed latest data.", "Đã tải lại dữ liệu mới nhất."));
+    }, 300);
+  }
+
+  useEffect(() => {
+    if (!token) return;
+    void loadAdminProfile(token);
+  }, [token, loadAdminProfile]);
+
+  useEffect(() => {
+    if (!token || !adminProfile) return;
+    const perms = adminProfile.permissions;
+    const role = adminProfile.role;
+    if (hasPermission(perms, "theme:read", role)) void loadThemeSettings(token);
+    if (hasPermission(perms, "payment:manage", role)) void loadPaymentSettings(token);
+    if (hasPermission(perms, "admin:manage", role)) void loadAdminUsers(token);
+  }, [token, adminProfile, loadPaymentSettings, loadThemeSettings, loadAdminUsers]);
+
+  useEffect(() => {
+    if (!token) return;
+    const refreshProfile = () => void loadAdminProfile(token);
+    window.addEventListener("focus", refreshProfile);
+    return () => window.removeEventListener("focus", refreshProfile);
+  }, [token, loadAdminProfile]);
+
+  useEffect(() => {
+    if (token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(`${API_URL}/auth/setup-status`);
+        const data = (await response.json().catch(() => null)) as { setupAvailable?: boolean } | null;
+        if (!cancelled && data && typeof data.setupAvailable === "boolean") {
+          setSetupAvailable(data.setupAvailable);
+        }
+      } catch {
+        if (!cancelled) setSetupAvailable(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  async function createAdminUserAccount() {
+    const em = newAdminEmail.trim();
+    const pw = newAdminPassword;
+    if (!em) {
+      setAdminUserMessage(bi("Enter an email.", "Nhập email."));
+      return;
+    }
+    if (pw.trim().length < 6) {
+      setAdminUserMessage(bi("Password must be at least 6 characters.", "Mật khẩu tối thiểu 6 ký tự."));
+      return;
+    }
+    if (adminUserBusy || !token) return;
+    setAdminUserBusy(true);
+    setAdminUserMessage("");
+    try {
+      const response = await fetch(`${API_URL}/cms/admin-users`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          email: em,
+          password: pw,
+          role: newAdminRole,
+          permissions: newAdminRole === "admin" ? [] : newAdminPermissions
+        })
+      });
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      const payload = (await response.json().catch(() => null)) as { error?: unknown } | null;
+      if (!response.ok) {
+        const errText =
+          typeof payload?.error === "string"
+            ? payload.error
+            : bi("Could not create admin account.", "Không tạo được tài khoản admin.");
+        setAdminUserMessage(errText);
+        return;
+      }
+      setNewAdminEmail("");
+      setNewAdminPassword("");
+      setNewAdminRole("member");
+      setNewAdminPermissions(defaultMemberPermissions());
+      setAdminUserMessage(bi("Admin account created.", "Đã tạo tài khoản admin."));
+      await loadAdminUsers(token);
+    } catch {
+      setAdminUserMessage(bi("Network error.", "Lỗi mạng."));
+    } finally {
+      setAdminUserBusy(false);
+    }
+  }
+
+  async function updateAdminUserAccess(
+    id: string,
+    role: AdminRole,
+    permissions: AdminPermission[]
+  ) {
+    if (!token || adminUserBusy) return;
+    setAdminUserBusy(true);
+    setAdminUserMessage("");
+    try {
+      const response = await fetch(`${API_URL}/cms/admin-users/${id}/access`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          role,
+          permissions: role === "admin" ? [] : permissions
+        })
+      });
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      const payload = (await response.json().catch(() => null)) as { error?: unknown } | null;
+      if (!response.ok) {
+        const errText =
+          typeof payload?.error === "string"
+            ? payload.error
+            : bi("Could not update access.", "Không cập nhật được phân quyền.");
+        setAdminUserMessage(errText);
+        return;
+      }
+      setAdminUserMessage(bi("Access updated.", "Đã cập nhật phân quyền."));
+      await loadAdminUsers(token);
+    } catch {
+      setAdminUserMessage(bi("Network error.", "Lỗi mạng."));
+    } finally {
+      setAdminUserBusy(false);
+    }
+  }
+
+  function patchAdminUserDraft(
+    id: string,
+    patch: Partial<{ role: AdminRole; permissions: AdminPermission[] }>
+  ) {
+    setAdminUsers((rows) =>
+      rows.map((row) => {
+        if (row.id !== id) return row;
+        const role = patch.role ?? row.role;
+        const permissions =
+          role === "admin"
+            ? []
+            : patch.permissions ?? (patch.role === "member" ? defaultMemberPermissions() : row.permissions);
+        return { ...row, role, permissions };
+      })
     );
   }
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
+  async function removeAdminUserAccount(id: string) {
+    if (!token || adminUserBusy) return;
+    setAdminUserBusy(true);
+    setAdminUserMessage("");
     try {
-      const raw = localStorage.getItem(MANUAL_LICENSES_STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as Array<Record<string, unknown>>;
-        if (Array.isArray(parsed)) {
-          const rows = parsed
-            .map((r) => {
-              const rec = r as Record<string, unknown>;
-              const id = String(rec.id ?? `m-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-              const issuedAt = typeof rec.issuedAt === "string" ? rec.issuedAt : null;
-              const email = typeof rec.email === "string" ? rec.email.trim() : "";
-              const password = typeof rec.password === "string" ? rec.password : "";
-              const noteKey = typeof rec.noteKey === "string" ? rec.noteKey.trim() : "";
-              const lk = typeof rec.licenseKey === "string" ? rec.licenseKey.trim() : "";
-              const licenseKey = lk || noteKey;
-              if (!licenseKey && !email && !password) {
-                return null;
-              }
-              if (!licenseKey) {
-                return {
-                  id,
-                  licenseKey: "",
-                  email,
-                  password,
-                  issuedAt,
-                  source: "manual" as const
-                };
-              }
-              return {
-                id,
-                licenseKey,
-                email,
-                password,
-                issuedAt,
-                source: "manual" as const
-              };
-            })
-            .filter((r): r is NonNullable<typeof r> => r !== null)
-            .filter((r) => r.licenseKey.length > 0 || r.email.length > 0 || r.password.length > 0);
-          setManualLicenses(rows);
-        }
+      const response = await fetch(`${API_URL}/cms/admin-users/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
       }
+      const payload = (await response.json().catch(() => null)) as { error?: unknown } | null;
+      if (!response.ok) {
+        const errText =
+          typeof payload?.error === "string"
+            ? payload.error
+            : bi("Could not delete admin account.", "Không xóa được tài khoản admin.");
+        setAdminUserMessage(errText);
+        return;
+      }
+      setAdminUserMessage(bi("Admin account deleted.", "Đã xóa tài khoản admin."));
+      await loadAdminUsers(token);
     } catch {
-      /* ignore */
+      setAdminUserMessage(bi("Network error.", "Lỗi mạng."));
+    } finally {
+      setAdminUserBusy(false);
     }
-    setManualLicenseHydrated(true);
-  }, []);
-
-  useEffect(() => {
-    if (!manualLicenseHydrated || typeof window === "undefined") return;
-    try {
-      localStorage.setItem(MANUAL_LICENSES_STORAGE_KEY, JSON.stringify(manualLicenses));
-    } catch {
-      /* ignore */
-    }
-  }, [manualLicenses, manualLicenseHydrated]);
-
-  function addManualLicenseRow() {
-    const key = manualLicenseKeyInput.trim();
-    const em = manualEmailInput.trim();
-    const pw = manualPasswordInput;
-    if (!key) {
-      setLicenseMessage(bi("Enter a license key.", "Nhập mã license."));
-      return;
-    }
-    if (!em) {
-      setLicenseMessage(bi("Enter an email.", "Nhập email."));
-      return;
-    }
-    if (!pw.trim()) {
-      setLicenseMessage(bi("Enter a password.", "Nhập mật khẩu."));
-      return;
-    }
-    setManualLicenses((prev) => [
-      {
-        id: `m-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-        licenseKey: key,
-        email: em,
-        password: pw,
-        issuedAt: new Date().toISOString(),
-        source: "manual"
-      },
-      ...prev
-    ]);
-    setManualLicenseKeyInput("");
-    setManualEmailInput("");
-    setManualPasswordInput("");
-    setLicenseMessage("");
   }
-
-  function removeManualLicenseRow(id: string) {
-    setManualLicenses((prev) => prev.filter((r) => r.id !== id));
-  }
-
-  useEffect(() => {
-    if (!token) return;
-    const context: MeaningFormValues = { category: form.category, key: form.key };
-    void loadMeanings(token, context);
-  }, [form.category, form.key, token, loadMeanings]);
-
-  useEffect(() => {
-    if (!token) return;
-    void loadPaymentSettings(token);
-    void loadThemeSettings(token);
-  }, [token, loadPaymentSettings, loadThemeSettings]);
 
   async function login(event: React.FormEvent) {
     event.preventDefault();
@@ -486,72 +486,21 @@ export default function AdminPage() {
     const data = await response.json();
     localStorage.setItem("adminToken", data.token);
     setToken(data.token);
-  }
-
-  async function handleCreate() {
-    if (loading) return;
-    setLoading(true);
-    setMessage("");
-    try {
-      const url = editingId ? `${API_URL}/cms/meanings/${editingId}` : `${API_URL}/cms/meanings`;
-      const method = editingId ? "PUT" : "POST";
-      const payload = {
-        category: form.category,
-        key: form.key.trim(),
-        title: { en: form.titleEn, vi: form.titleVi },
-        content: { en: form.contentEn, vi: form.contentVi }
-      };
-      const response = await fetch(url, {
-        method,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify(payload)
+    if (data.role && Array.isArray(data.permissions)) {
+      setAdminProfile({
+        id: "",
+        email: email.trim(),
+        role: data.role,
+        permissions: data.permissions
       });
-      if (response.status === 401) {
-        handleUnauthorized();
-        return;
-      }
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as { error?: unknown } | null;
-        const textError =
-          typeof payload?.error === "string"
-            ? payload.error
-            : bi("Create/update failed. Check required fields.", "Tạo/cập nhật thất bại. Kiểm tra các trường bắt buộc.");
-        setMessage(textError);
-        return;
-      }
-      setMessage(
-        editingId
-          ? bi("Updated successfully.", "Cập nhật thành công.")
-          : bi("Created successfully.", "Tạo mục thành công.")
-      );
-      setForm(emptyForm);
-      setEditingId(null);
-      setUseCustomKey(false);
-      lastLoadMeaningSignature.current = "";
-      await loadMeanings();
-    } finally {
-      setLoading(false);
     }
-  }
-
-  async function removeMeaning(id: string) {
-    setMessage("");
-    const response = await fetch(`${API_URL}/cms/meanings/${id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    if (response.status === 401) {
-      handleUnauthorized();
-      return;
-    }
-    setMessage(bi("Deleted.", "Đã xóa."));
-    await loadMeanings();
   }
 
   async function exportJson() {
+    if (!can("backup:manage")) {
+      setMessage(bi("You do not have permission to export data.", "Bạn không có quyền xuất dữ liệu."));
+      return;
+    }
     const response = await fetch(`${API_URL}/cms/export`, {
       headers: { Authorization: `Bearer ${token}` }
     });
@@ -608,6 +557,102 @@ export default function AdminPage() {
       setThemeMessage(bi("Upload failed (network).", "Tải lên thất bại (lỗi mạng)."));
     } finally {
       setLogoUploadBusy(false);
+    }
+  }
+
+  async function uploadVietQrFile(file: File | null) {
+    if (!file || !token) return;
+    setVietqrUploadBusy(true);
+    setPaymentMessage("");
+    try {
+      const fd = new FormData();
+      fd.append("vietqr", file);
+      const response = await fetch(`${API_URL}/cms/upload-vietqr`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd
+      });
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      const data = (await response.json().catch(() => null)) as {
+        vietqrImageUrl?: string;
+        paymentSettings?: typeof paymentForm;
+        error?: string;
+      } | null;
+      if (!response.ok) {
+        setPaymentMessage(data?.error ?? bi("Upload failed.", "Tải lên thất bại."));
+        return;
+      }
+      if (data?.paymentSettings) {
+        setPaymentForm((prev) => ({
+          ...prev,
+          vietqrImageUrl: data.paymentSettings!.vietqrImageUrl ?? prev.vietqrImageUrl,
+          vietqrInstructionsVi: data.paymentSettings!.vietqrInstructionsVi ?? prev.vietqrInstructionsVi,
+          vietqrInstructionsEn: data.paymentSettings!.vietqrInstructionsEn ?? prev.vietqrInstructionsEn,
+          paypalUnlockUrl: data.paymentSettings!.paypalUnlockUrl ?? prev.paypalUnlockUrl,
+          paypalQrImageUrl: data.paymentSettings!.paypalQrImageUrl ?? prev.paypalQrImageUrl,
+          aspectUnlockPriceVnd: data.paymentSettings!.aspectUnlockPriceVnd ?? prev.aspectUnlockPriceVnd,
+          aspectUnlockPriceUsd: data.paymentSettings!.aspectUnlockPriceUsd ?? prev.aspectUnlockPriceUsd
+        }));
+      } else if (data?.vietqrImageUrl) {
+        setPaymentForm((p) => ({ ...p, vietqrImageUrl: data.vietqrImageUrl! }));
+      }
+      setPaymentMessage(bi("VietQR image uploaded and saved.", "Đã tải và lưu ảnh mã QR VietQR."));
+    } catch {
+      setPaymentMessage(bi("Upload failed (network).", "Tải lên thất bại (lỗi mạng)."));
+    } finally {
+      setVietqrUploadBusy(false);
+      if (vietqrFileInputRef.current) vietqrFileInputRef.current.value = "";
+    }
+  }
+
+  async function uploadPaypalQrFile(file: File | null) {
+    if (!file || !token) return;
+    setPaypalQrUploadBusy(true);
+    setPaymentMessage("");
+    try {
+      const fd = new FormData();
+      fd.append("paypalQr", file);
+      const response = await fetch(`${API_URL}/cms/upload-paypal-qr`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd
+      });
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      const data = (await response.json().catch(() => null)) as {
+        paypalQrImageUrl?: string;
+        paymentSettings?: typeof paymentForm;
+        error?: string;
+      } | null;
+      if (!response.ok) {
+        setPaymentMessage(data?.error ?? bi("Upload failed.", "Tải lên thất bại."));
+        return;
+      }
+      if (data?.paymentSettings) {
+        setPaymentForm((prev) => ({
+          ...prev,
+          paypalQrImageUrl: data.paymentSettings!.paypalQrImageUrl ?? prev.paypalQrImageUrl,
+          vietqrImageUrl: data.paymentSettings!.vietqrImageUrl ?? prev.vietqrImageUrl,
+          vietqrInstructionsVi: data.paymentSettings!.vietqrInstructionsVi ?? prev.vietqrInstructionsVi,
+          vietqrInstructionsEn: data.paymentSettings!.vietqrInstructionsEn ?? prev.vietqrInstructionsEn,
+          paypalUnlockUrl: data.paymentSettings!.paypalUnlockUrl ?? prev.paypalUnlockUrl,
+          aspectUnlockPriceVnd: data.paymentSettings!.aspectUnlockPriceVnd ?? prev.aspectUnlockPriceVnd,
+          aspectUnlockPriceUsd: data.paymentSettings!.aspectUnlockPriceUsd ?? prev.aspectUnlockPriceUsd
+        }));
+      } else if (data?.paypalQrImageUrl) {
+        setPaymentForm((p) => ({ ...p, paypalQrImageUrl: data.paypalQrImageUrl! }));
+      }
+      setPaymentMessage(bi("PayPal QR image uploaded and saved.", "Đã tải và lưu ảnh QR PayPal."));
+    } catch {
+      setPaymentMessage(bi("Upload failed (network).", "Tải lên thất bại (lỗi mạng)."));
+    } finally {
+      setPaypalQrUploadBusy(false);
+      if (paypalQrFileInputRef.current) paypalQrFileInputRef.current.value = "";
     }
   }
 
@@ -711,6 +756,10 @@ export default function AdminPage() {
   }
 
   async function importFromJson() {
+    if (!can("backup:manage")) {
+      setMessage(bi("You do not have permission to import data.", "Bạn không có quyền nhập dữ liệu."));
+      return;
+    }
     if (!importJson.trim()) {
       setMessage(bi("Paste JSON payload before importing.", "Hãy dán nội dung JSON trước khi nhập."));
       return;
@@ -749,7 +798,7 @@ export default function AdminPage() {
         return;
       }
       setImportJson("");
-      await loadMeanings();
+      setCmsRefreshSignal((n) => n + 1);
       setMessage(bi("Imported.", "Đã nhập xong."));
     } catch {
       setMessage(bi("Invalid JSON import payload.", "Payload JSON không hợp lệ."));
@@ -759,6 +808,10 @@ export default function AdminPage() {
   }
 
   async function backupBackendData() {
+    if (!can("backup:manage")) {
+      setMessage(bi("You do not have permission to backup data.", "Bạn không có quyền sao lưu dữ liệu."));
+      return;
+    }
     if (!token || backupBusy) return;
     setBackupBusy(true);
     setMessage("");
@@ -792,6 +845,10 @@ export default function AdminPage() {
   }
 
   async function importBackendBackupFile(file: File | null) {
+    if (!can("backup:manage")) {
+      setMessage(bi("You do not have permission to import backup.", "Bạn không có quyền nhập backup."));
+      return;
+    }
     if (!file || !token || importBackupBusy) return;
     setImportBackupBusy(true);
     setMessage("");
@@ -819,8 +876,7 @@ export default function AdminPage() {
         setMessage(errText);
         return;
       }
-      lastLoadMeaningSignature.current = "";
-      await loadMeanings(token, { category: form.category, key: form.key });
+      setCmsRefreshSignal((n) => n + 1);
       await loadPaymentSettings(token);
       await loadThemeSettings(token);
       setMessage(bi("Backend backup imported.", "Đã nhập backup backend."));
@@ -829,63 +885,6 @@ export default function AdminPage() {
     } finally {
       setImportBackupBusy(false);
       if (backendBackupInputRef.current) backendBackupInputRef.current.value = "";
-    }
-  }
-
-  function backupFrontendData() {
-    if (frontendBackupBusy) return;
-    setFrontendBackupBusy(true);
-    try {
-      const payload = {
-        exportedAt: new Date().toISOString(),
-        source: "frontend-local",
-        manualLicenses
-      };
-      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `astro-backup-frontend-${stamp}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      setLicenseMessage(bi("Frontend backup downloaded.", "Đã tải file backup frontend."));
-    } finally {
-      setFrontendBackupBusy(false);
-    }
-  }
-
-  async function importFrontendBackupFile(file: File | null) {
-    if (!file || frontendImportBusy) return;
-    setFrontendImportBusy(true);
-    setLicenseMessage("");
-    try {
-      const text = await file.text();
-      const parsed = JSON.parse(text) as { manualLicenses?: unknown };
-      if (!Array.isArray(parsed.manualLicenses)) {
-        setLicenseMessage(bi("Invalid frontend backup format.", "Định dạng backup frontend không hợp lệ."));
-        return;
-      }
-      const normalized = parsed.manualLicenses
-        .map((item) => {
-          if (typeof item !== "object" || item === null) return null;
-          const rec = item as Record<string, unknown>;
-          const id = String(rec.id ?? `m-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`);
-          const licenseKey = typeof rec.licenseKey === "string" ? rec.licenseKey.trim() : "";
-          const email = typeof rec.email === "string" ? rec.email.trim() : "";
-          const password = typeof rec.password === "string" ? rec.password : "";
-          const issuedAt = typeof rec.issuedAt === "string" ? rec.issuedAt : null;
-          if (!licenseKey && !email && !password) return null;
-          return { id, licenseKey, email, password, issuedAt, source: "manual" as const };
-        })
-        .filter((row): row is NonNullable<typeof row> => row !== null);
-      setManualLicenses(normalized);
-      setLicenseMessage(bi("Frontend backup imported.", "Đã nhập backup frontend."));
-    } catch {
-      setLicenseMessage(bi("Invalid frontend backup JSON.", "Backup frontend JSON không hợp lệ."));
-    } finally {
-      setFrontendImportBusy(false);
-      if (frontendBackupInputRef.current) frontendBackupInputRef.current.value = "";
     }
   }
 
@@ -916,24 +915,33 @@ export default function AdminPage() {
             {bi("Sign in", "Đăng nhập")}
           </button>
           {message && <p className={`text-xs ${adminNoticeClass(message)}`}>{message}</p>}
-          <p className="text-xs text-amber-400">
-            {bi("Default (dev, with Mongo):", "Mặc định (dev, có Mongo):")} admin@example.com / admin12345
-          </p>
-          <p className="text-xs text-amber-200">
-            {bi("Have a product license?", "Có license sản phẩm?")}{" "}
-            <Link href="/admin/setup" className="font-medium text-amber-400 underline hover:text-amber-300">
-              {bi("Create admin via license", "Tạo admin bằng license")}
-            </Link>
-          </p>
+          {setupAvailable && (
+            <p className="text-xs text-amber-200">
+              {bi("No admin yet?", "Chưa có admin?")}{" "}
+              <Link href="/admin/setup" className="font-medium text-amber-400 underline hover:text-amber-300">
+                {bi("Create first admin account", "Tạo tài khoản admin đầu tiên")}
+              </Link>
+            </p>
+          )}
         </form>
       </main>
     );
   }
 
+  const themeReadOnly = !can("theme:write");
+  const cmsReadOnly = !can("cms:write");
+
   return (
     <main className="mx-auto max-w-6xl space-y-6 p-6 text-white">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/35 bg-black/80 px-4 py-3 shadow-[0_4px_40px_rgba(0,0,0,0.5)] backdrop-blur-md">
-        <h1 className="text-lg font-semibold text-white">{bi("Admin panel", "Trang quản trị")}</h1>
+        <div>
+          <h1 className="text-lg font-semibold text-white">{bi("Admin panel", "Trang quản trị")}</h1>
+          {adminProfile && (
+            <p className="mt-1 text-xs text-amber-200">
+              {adminProfile.email} · {bi(roleLabel(adminProfile.role).en, roleLabel(adminProfile.role).vi)}
+            </p>
+          )}
+        </div>
         <button
           type="button"
           onClick={logout}
@@ -942,6 +950,43 @@ export default function AdminPage() {
           {bi("Log out", "Đăng xuất")}
         </button>
       </div>
+
+      <div className="flex flex-wrap gap-2 rounded-xl border border-amber-500/35 bg-black/80 p-2 shadow-[0_4px_40px_rgba(0,0,0,0.5)] backdrop-blur-md">
+        <button
+          type="button"
+          onClick={() => setAdminTab("manage")}
+          className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+            adminTab === "manage"
+              ? "bg-amber-600 text-white"
+              : "border border-zinc-600 text-amber-100 hover:bg-zinc-900"
+          }`}
+        >
+          {bi("CMS & settings", "Quản trị CMS")}
+        </button>
+        {can("preview:access") && (
+        <button
+          type="button"
+          onClick={() => setAdminTab("preview")}
+          className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+            adminTab === "preview"
+              ? "bg-amber-600 text-white"
+              : "border border-zinc-600 text-amber-100 hover:bg-zinc-900"
+          }`}
+        >
+          {bi("Storefront preview", "Xem trước storefront")}
+        </button>
+        )}
+      </div>
+
+      {adminTab === "preview" && can("preview:access") ? (
+        <BirthChartApp unlockAspects adminToken={token} />
+      ) : !adminProfile ? (
+        <p className="rounded-xl border border-amber-500/35 bg-black/80 p-4 text-sm text-amber-200">
+          {bi("Loading permissions…", "Đang tải phân quyền…")}
+        </p>
+      ) : (
+        <>
+      {can("theme:read") && (
       <section className="rounded-xl border border-amber-500/35 bg-black/80 p-4 shadow-[0_4px_40px_rgba(0,0,0,0.5)] backdrop-blur-md">
         <h2 className="text-lg font-semibold text-white">
           {bi("Branding & theme", "Giao diện & thương hiệu")}
@@ -1142,13 +1187,122 @@ export default function AdminPage() {
               </div>
             ))}
           </div>
-          <button type="submit" className="rounded bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-500">
+          <div className="rounded-lg border border-amber-500/25 bg-zinc-950/60 p-3">
+            <h3 className="text-sm font-semibold text-white">
+              {bi("Natal chart wheel", "Bánh xe lá số natal")}
+            </h3>
+            <p className="mt-1 text-xs leading-relaxed text-amber-200">
+              {bi(
+                "Customize aspect line colors and fonts for zodiac sign glyphs (♈♉…) and planet glyphs (☉☽☿…) on the chart wheel.",
+                "Tùy chỉnh màu đường aspect và font ký hiệu cung (♈♉…) cùng hành tinh (☉☽☿…) trên bánh xe lá số."
+              )}
+            </p>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {(
+                [
+                  ["aspectColorConjunction", bi("Conjunction ☌", "Hợp ☌")],
+                  ["aspectColorSextile", bi("Sextile ✶", "Lục hợp ✶")],
+                  ["aspectColorSquare", bi("Square □", "Vuông □")],
+                  ["aspectColorTrine", bi("Trine △", "Tam hợp △")],
+                  ["aspectColorOpposition", bi("Opposition ☍", "Đối ☍")]
+                ] as const
+              ).map(([key, label]) => (
+                <div key={key}>
+                  <label className="mb-1 block text-xs font-medium text-amber-100">{label}</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="color"
+                      className="h-10 w-14 cursor-pointer rounded border border-zinc-600 bg-zinc-950 p-0"
+                      value={
+                        /^#[0-9a-fA-F]{6}$/.test(themeForm[key])
+                          ? themeForm[key]
+                          : themeForm[key].length === 4 && themeForm[key].startsWith("#")
+                            ? `#${themeForm[key][1]}${themeForm[key][1]}${themeForm[key][2]}${themeForm[key][2]}${themeForm[key][3]}${themeForm[key][3]}`
+                            : "#000000"
+                      }
+                      onChange={(e) => setThemeForm((t) => ({ ...t, [key]: e.target.value }))}
+                    />
+                    <input
+                      className="min-w-0 flex-1 rounded border border-zinc-600 bg-zinc-950 p-2 font-mono text-xs text-white"
+                      value={themeForm[key]}
+                      onChange={(e) => setThemeForm((t) => ({ ...t, [key]: e.target.value }))}
+                      placeholder="#RRGGBB"
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-amber-100">
+                  {bi("Font — zodiac sign glyphs", "Font — ký hiệu cung hoàng đạo")}
+                </label>
+                <select
+                  className="w-full rounded border border-zinc-600 bg-zinc-950 p-2 text-sm text-white [color-scheme:dark]"
+                  value={themeForm.fontChartSign}
+                  onChange={(e) => setThemeForm((t) => ({ ...t, fontChartSign: e.target.value }))}
+                >
+                  {chartGlyphFontSelectOptions(themeForm.fontChartSign).map((opt) => (
+                    <option key={opt.value} value={opt.value} className="bg-zinc-950 text-white">
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-2 text-[11px] text-amber-300/90">
+                  {bi("Preview:", "Xem trước:")}{" "}
+                  <span
+                    className="text-lg text-white"
+                    style={{ fontFamily: `'${themeForm.fontChartSign}', serif` }}
+                  >
+                    ♈ ♉ ♊ ♋ ♌ ♍ ♎ ♏ ♐ ♑ ♒ ♓
+                  </span>
+                </p>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-amber-100">
+                  {bi("Font — planet glyphs", "Font — ký hiệu hành tinh")}
+                </label>
+                <select
+                  className="w-full rounded border border-zinc-600 bg-zinc-950 p-2 text-sm text-white [color-scheme:dark]"
+                  value={themeForm.fontChartPlanet}
+                  onChange={(e) => setThemeForm((t) => ({ ...t, fontChartPlanet: e.target.value }))}
+                >
+                  {chartGlyphFontSelectOptions(themeForm.fontChartPlanet).map((opt) => (
+                    <option key={opt.value} value={opt.value} className="bg-zinc-950 text-white">
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-2 text-[11px] text-amber-300/90">
+                  {bi("Preview:", "Xem trước:")}{" "}
+                  <span
+                    className="text-lg text-white"
+                    style={{ fontFamily: `'${themeForm.fontChartPlanet}', serif` }}
+                  >
+                    ☉ ☽ ☿ ♀ ♂ ♃ ♄ ♅ ♆ ♇ ☊ ☋
+                  </span>
+                </p>
+              </div>
+            </div>
+          </div>
+          <button
+            type="submit"
+            disabled={themeReadOnly}
+            className="rounded bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-500 disabled:cursor-not-allowed disabled:bg-zinc-700"
+          >
             {bi("Save branding & theme", "Lưu giao diện & thương hiệu")}
           </button>
+          {themeReadOnly && (
+            <p className="text-xs text-amber-300">
+              {bi("View-only — you cannot edit theme settings.", "Chỉ xem — bạn không có quyền chỉnh giao diện.")}
+            </p>
+          )}
           {themeMessage && <p className={`text-xs ${adminNoticeClass(themeMessage)}`}>{themeMessage}</p>}
         </form>
       </section>
+      )}
 
+      {can("payment:manage") && (
       <section className="rounded-xl border border-amber-500/35 bg-black/80 p-4 shadow-[0_4px_40px_rgba(0,0,0,0.5)] backdrop-blur-md">
         <h2 className="text-lg font-semibold text-white">
           {bi("Payment — VietQR & PayPal", "Thanh toán — VietQR & PayPal")}
@@ -1194,14 +1348,53 @@ export default function AdminPage() {
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-amber-100">
-              {bi("QR image URL (https://…)", "URL ảnh mã QR (https://…)")}
+              {bi("VietQR code image", "Ảnh mã QR VietQR")}
             </label>
             <input
-              className="w-full rounded border border-zinc-600 bg-zinc-950 p-2 text-sm text-white"
-              value={paymentForm.vietqrImageUrl}
-              onChange={(e) => setPaymentForm((p) => ({ ...p, vietqrImageUrl: e.target.value }))}
-              placeholder="https://example.com/vietqr.png"
+              ref={vietqrFileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
+              className="hidden"
+              disabled={vietqrUploadBusy}
+              onChange={(e) => void uploadVietQrFile(e.target.files?.[0] ?? null)}
             />
+            <button
+              type="button"
+              disabled={vietqrUploadBusy}
+              onClick={() => vietqrFileInputRef.current?.click()}
+              className="rounded bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {vietqrUploadBusy
+                ? bi("Uploading…", "Đang tải lên…")
+                : bi("Upload QR image", "Tải ảnh QR lên")}
+            </button>
+            <p className="mt-2 text-xs text-amber-200">
+              {bi(
+                "PNG, JPG, GIF, WebP, SVG · max 2 MB · stored on the API server",
+                "PNG, JPG, GIF, WebP, SVG · tối đa 2 MB · lưu trên server API"
+              )}
+            </p>
+            {paymentForm.vietqrImageUrl.trim() ? (
+              <div className="mt-3 space-y-2 rounded border border-zinc-700 bg-zinc-950/80 p-2">
+                <span className="text-xs font-medium text-amber-100">{bi("Preview", "Xem trước")}</span>
+                <div className="flex justify-center rounded border border-zinc-700 bg-white p-2">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={resolveThemeAssetUrl(paymentForm.vietqrImageUrl)}
+                    alt={bi("VietQR preview", "Xem trước VietQR")}
+                    className="max-h-48 max-w-full object-contain"
+                    onError={(ev) => {
+                      (ev.target as HTMLImageElement).style.display = "none";
+                    }}
+                  />
+                </div>
+                <p className="text-[11px] font-mono text-amber-200/90">{paymentForm.vietqrImageUrl}</p>
+              </div>
+            ) : (
+              <p className="mt-2 text-xs text-amber-300">
+                {bi("No QR image uploaded yet.", "Chưa tải ảnh QR.")}
+              </p>
+            )}
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-amber-100">
@@ -1256,14 +1449,47 @@ export default function AdminPage() {
               placeholder="https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=..."
             />
             <label className="mt-3 mb-1 block text-xs font-medium text-amber-100">
-              {bi("PayPal QR image URL (https://…)", "URL ảnh QR PayPal (https://…)")}
+              {bi("PayPal QR image", "Ảnh QR PayPal")}
             </label>
             <input
-              className="w-full rounded border border-zinc-600 bg-zinc-950 p-2 text-sm text-white"
-              value={paymentForm.paypalQrImageUrl}
-              onChange={(e) => setPaymentForm((p) => ({ ...p, paypalQrImageUrl: e.target.value }))}
-              placeholder="/api/uploads/paypal-qr-default.png"
+              ref={paypalQrFileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
+              className="hidden"
+              disabled={paypalQrUploadBusy}
+              onChange={(e) => void uploadPaypalQrFile(e.target.files?.[0] ?? null)}
             />
+            <button
+              type="button"
+              disabled={paypalQrUploadBusy}
+              onClick={() => paypalQrFileInputRef.current?.click()}
+              className="rounded bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {paypalQrUploadBusy
+                ? bi("Uploading…", "Đang tải lên…")
+                : bi("Upload PayPal QR image", "Tải ảnh QR PayPal lên")}
+            </button>
+            {paymentForm.paypalQrImageUrl.trim() ? (
+              <div className="mt-3 space-y-2 rounded border border-zinc-700 bg-zinc-950/80 p-2">
+                <span className="text-xs font-medium text-amber-100">{bi("Preview", "Xem trước")}</span>
+                <div className="flex justify-center rounded border border-zinc-700 bg-white p-2">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={resolveThemeAssetUrl(paymentForm.paypalQrImageUrl)}
+                    alt={bi("PayPal QR preview", "Xem trước QR PayPal")}
+                    className="max-h-48 max-w-full object-contain"
+                    onError={(ev) => {
+                      (ev.target as HTMLImageElement).style.display = "none";
+                    }}
+                  />
+                </div>
+                <p className="text-[11px] font-mono text-amber-200/90">{paymentForm.paypalQrImageUrl}</p>
+              </div>
+            ) : (
+              <p className="mt-2 text-xs text-amber-300">
+                {bi("No PayPal QR image uploaded yet.", "Chưa tải ảnh QR PayPal.")}
+              </p>
+            )}
             <p className="mt-2 text-sm text-amber-200">
               {bi("Env fallback", "Biến môi trường dự phòng")}{" "}
               <code className="rounded bg-zinc-900 px-1.5 py-0.5 font-mono text-[11px] text-amber-200">PAYPAL_UNLOCK_URL</code>
@@ -1277,114 +1503,124 @@ export default function AdminPage() {
           {paymentMessage && <p className={`text-xs ${adminNoticeClass(paymentMessage)}`}>{paymentMessage}</p>}
         </form>
       </section>
+      )}
 
+      {can("admin:manage") && (
       <section className="rounded-xl border border-amber-500/35 bg-black/80 p-4 shadow-[0_4px_40px_rgba(0,0,0,0.5)] backdrop-blur-md">
-        <h2 className="text-lg font-semibold text-white">{bi("Licenses", "Quản lý license")}</h2>
+        <h2 className="text-lg font-semibold text-white">{bi("Admin accounts", "Tài khoản quản trị")}</h2>
         <p className="mt-1 text-sm leading-relaxed text-amber-200">
           {bi(
-            "Enter license key, email, and password below — saved only in this browser for your records. Product signup:",
-            "Nhập mã license, email và mật khẩu bên dưới — chỉ lưu trên trình duyệt này để bạn ghi chú. Đăng ký:"
-          )}{" "}
-          <Link href="/admin/setup" className="font-medium text-amber-400 underline hover:text-amber-300">
-            /admin/setup
-          </Link>
-          .
-        </p>
-        <p
-          className="mt-3 rounded-lg border border-amber-500/40 bg-amber-950/30 px-3 py-2 text-xs leading-relaxed text-amber-100"
-          role="note"
-        >
-          {bi(
-            "Important: rows here do not create a server account. Sign-in only accepts users stored in the API database — created via /admin/setup with a valid license key (when MongoDB has that license), or the ADMIN_EMAIL / ADMIN_PASSWORD from environment when no DB user matches.",
-            "Lưu ý: các dòng ở đây không tạo tài khoản trên server. Đăng nhập chỉ chấp nhận user có trong CSDL API — tạo qua /admin/setup với mã license hợp lệ (MongoDB đã có license đó), hoặc ADMIN_EMAIL / ADMIN_PASSWORD trong biến môi trường khi chưa có user trùng trong DB."
+            "Create email and password accounts for CMS sign-in. Stored in MongoDB when connected, otherwise in backend/data/admin-users.json.",
+            "Tạo tài khoản email và mật khẩu để đăng nhập CMS. Lưu MongoDB khi có kết nối, không thì lưu file backend/data/admin-users.json."
           )}
         </p>
         <div className="mt-4 space-y-2 rounded-lg border border-amber-500/25 bg-zinc-950/60 p-3">
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              className="rounded bg-sky-700 px-3 py-2 text-xs font-medium text-white hover:bg-sky-600 disabled:bg-sky-900"
-              onClick={backupFrontendData}
-              disabled={frontendBackupBusy}
-            >
-              {frontendBackupBusy ? bi("Backing up…", "Đang sao lưu…") : bi("Backup frontend", "Backup frontend")}
-            </button>
-            <button
-              type="button"
-              className="rounded bg-violet-700 px-3 py-2 text-xs font-medium text-white hover:bg-violet-600 disabled:bg-violet-900"
-              onClick={() => frontendBackupInputRef.current?.click()}
-              disabled={frontendImportBusy}
-            >
-              {frontendImportBusy ? bi("Importing…", "Đang nhập…") : bi("Import frontend", "Import frontend")}
-            </button>
-            <input
-              ref={frontendBackupInputRef}
-              type="file"
-              accept="application/json,.json"
-              className="sr-only"
-              onChange={(e) => void importFrontendBackupFile(e.target.files?.[0] ?? null)}
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-medium text-amber-100">{bi("License key", "Mã license")}</label>
-            <input
-              className="w-full rounded border border-zinc-600 bg-zinc-950 p-2 text-sm text-white font-mono"
-              value={manualLicenseKeyInput}
-              onChange={(e) => setManualLicenseKeyInput(e.target.value)}
-              placeholder="ASL-…"
-              autoComplete="off"
-            />
-          </div>
-          <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+          <div className="grid gap-2 sm:grid-cols-[1fr_1fr_12rem_auto] sm:items-end">
             <div>
               <label className="mb-1 block text-xs font-medium text-amber-100">{bi("Email", "Email")}</label>
               <input
                 type="email"
                 className="w-full rounded border border-zinc-600 bg-zinc-950 p-2 text-sm text-white"
-                value={manualEmailInput}
-                onChange={(e) => setManualEmailInput(e.target.value)}
+                value={newAdminEmail}
+                onChange={(e) => setNewAdminEmail(e.target.value)}
                 placeholder="you@example.com"
                 autoComplete="off"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-amber-100">{bi("Password", "Mật khẩu")}</label>
+              <label className="mb-1 block text-xs font-medium text-amber-100">
+                {bi("Password (min 6 characters)", "Mật khẩu (tối thiểu 6 ký tự)")}
+              </label>
               <input
                 type="text"
                 className="w-full rounded border border-zinc-600 bg-zinc-950 p-2 text-sm text-white font-mono"
-                value={manualPasswordInput}
-                onChange={(e) => setManualPasswordInput(e.target.value)}
+                value={newAdminPassword}
+                onChange={(e) => setNewAdminPassword(e.target.value)}
                 placeholder="••••••••"
-                autoComplete="off"
+                autoComplete="new-password"
+                minLength={6}
               />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-amber-100">{bi("Account type", "Loại tài khoản")}</label>
+              <select
+                className="w-full rounded border border-zinc-600 bg-zinc-950 p-2 text-sm text-white [color-scheme:dark]"
+                value={newAdminRole}
+                onChange={(e) => {
+                  const role = e.target.value as AdminRole;
+                  setNewAdminRole(role);
+                  if (role === "member" && newAdminPermissions.length === 0) {
+                    setNewAdminPermissions(defaultMemberPermissions());
+                  }
+                }}
+              >
+                {ADMIN_ROLE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value} className="bg-zinc-950 text-white">
+                    {bi(option.labelEn, option.labelVi)}
+                  </option>
+                ))}
+              </select>
             </div>
             <button
               type="button"
-              onClick={addManualLicenseRow}
-              className="rounded bg-zinc-700 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-600"
+              disabled={adminUserBusy}
+              onClick={() => void createAdminUserAccount()}
+              className="rounded bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-500 disabled:bg-zinc-700"
             >
-              {bi("Add row", "Thêm dòng")}
+              {adminUserBusy ? bi("Saving…", "Đang lưu…") : bi("Create account", "Tạo tài khoản")}
             </button>
           </div>
+          {newAdminRole === "member" && (
+            <div className="rounded border border-zinc-700 bg-zinc-950/80 p-3">
+              <p className="mb-2 text-xs font-medium text-amber-100">
+                {bi("Member permissions", "Quyền thành viên")}
+              </p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {MEMBER_PERMISSION_OPTIONS.map((option) => (
+                  <label key={option.id} className="flex cursor-pointer items-start gap-2 text-xs text-amber-200">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={newAdminPermissions.includes(option.id)}
+                      onChange={() =>
+                        setNewAdminPermissions((current) => toggleMemberPermission(current, option.id))
+                      }
+                    />
+                    <span>{bi(option.labelEn, option.labelVi)}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="mt-2 text-[11px] text-amber-300/90">
+                {bi(
+                  "Payment, import/export, and account management are admin-only.",
+                  "Thanh toán, nhập/xuất dữ liệu và quản lý tài khoản chỉ dành cho admin."
+                )}
+              </p>
+            </div>
+          )}
         </div>
-        {licenseMessage && <p className={`mt-2 text-xs ${adminNoticeClass(licenseMessage)}`}>{licenseMessage}</p>}
-        <div className="mt-3 max-h-56 overflow-auto rounded border border-amber-500/25">
+        {adminUserMessage && <p className={`mt-2 text-xs ${adminNoticeClass(adminUserMessage)}`}>{adminUserMessage}</p>}
+        {adminUsersLoading && (
+          <p className="mt-2 text-xs text-amber-300">{bi("Loading accounts…", "Đang tải tài khoản…")}</p>
+        )}
+        <div className="mt-3 max-h-[28rem] overflow-auto rounded border border-amber-500/25">
           <table className="w-full text-left text-xs text-amber-200">
             <thead className="sticky top-0 bg-zinc-950 text-amber-300">
               <tr>
-                <th className="p-2 whitespace-nowrap">{bi("Issued", "Ngày cấp")}</th>
-                <th className="p-2">{bi("License key", "Mã license")}</th>
+                <th className="p-2 whitespace-nowrap">{bi("Created", "Ngày tạo")}</th>
                 <th className="p-2">{bi("Email", "Email")}</th>
                 <th className="p-2">{bi("Password", "Mật khẩu")}</th>
+                <th className="p-2">{bi("Type", "Loại")}</th>
+                <th className="p-2 min-w-[14rem]">{bi("Permissions", "Phân quyền")}</th>
                 <th className="p-2 whitespace-nowrap">{bi("Remove", "Xóa")}</th>
               </tr>
             </thead>
             <tbody>
-              {manualLicenses.map((row) => (
-                <tr key={row.id} className="border-t border-zinc-800/80">
+              {adminUsers.map((row) => (
+                <tr key={row.id} className="border-t border-zinc-800/80 align-top">
                   <td className="p-2 whitespace-nowrap text-[11px] text-amber-100/95">
-                    {row.issuedAt
-                      ? new Date(row.issuedAt).toLocaleString(undefined, {
+                    {row.createdAt
+                      ? new Date(row.createdAt).toLocaleString(undefined, {
                           year: "numeric",
                           month: "2-digit",
                           day: "2-digit",
@@ -1393,27 +1629,90 @@ export default function AdminPage() {
                         })
                       : "—"}
                   </td>
-                  <td className="p-2 font-mono text-[11px] text-amber-100">{row.licenseKey || "—"}</td>
-                  <td className="p-2 text-[11px] text-amber-100">{row.email || "—"}</td>
-                  <td className="p-2 font-mono text-[11px] tracking-wide text-emerald-200/95">{row.password || "—"}</td>
+                  <td className="p-2 text-[11px] text-amber-100">{row.email}</td>
+                  <td className="p-2 font-mono text-[11px] tracking-wide text-emerald-200/95">
+                    {row.password || "—"}
+                  </td>
                   <td className="p-2">
-                    <button
-                      type="button"
-                      onClick={() => removeManualLicenseRow(row.id)}
-                      className="text-rose-400 hover:text-rose-300 hover:underline"
+                    <select
+                      className="rounded border border-zinc-600 bg-zinc-950 p-1.5 text-[11px] text-white [color-scheme:dark]"
+                      value={row.role}
+                      disabled={adminUserBusy}
+                      onChange={(e) => {
+                        const role = e.target.value as AdminRole;
+                        const permissions =
+                          role === "member"
+                            ? row.permissions.length > 0
+                              ? row.permissions
+                              : defaultMemberPermissions()
+                            : [];
+                        patchAdminUserDraft(row.id, { role, permissions });
+                        if (role === "admin") {
+                          void updateAdminUserAccess(row.id, role, permissions);
+                        }
+                      }}
                     >
-                      {bi("Remove", "Xóa")}
-                    </button>
+                      {ADMIN_ROLE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value} className="bg-zinc-950 text-white">
+                          {bi(option.labelEn.split(" — ")[0], option.labelVi.split(" — ")[0])}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-[10px] text-amber-300/80">{bi(roleLabel(row.role).en, roleLabel(row.role).vi)}</p>
+                  </td>
+                  <td className="p-2">
+                    {row.role === "admin" ? (
+                      <span className="text-[11px] text-emerald-300">
+                        {bi("Full access (payment & accounts included)", "Toàn quyền (gồm thanh toán & tài khoản)")}
+                      </span>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="grid gap-1.5">
+                          {MEMBER_PERMISSION_OPTIONS.map((option) => (
+                            <label
+                              key={option.id}
+                              className="flex cursor-pointer items-start gap-1.5 text-[11px] text-amber-200"
+                            >
+                              <input
+                                type="checkbox"
+                                className="mt-0.5"
+                                disabled={adminUserBusy}
+                                checked={row.permissions.includes(option.id)}
+                                onChange={() => {
+                                  const permissions = toggleMemberPermission(row.permissions, option.id);
+                                  patchAdminUserDraft(row.id, { permissions });
+                                  void updateAdminUserAccess(row.id, row.role, permissions);
+                                }}
+                              />
+                              <span>{bi(option.labelEn, option.labelVi)}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </td>
+                  <td className="p-2">
+                    {row.role === "admin" ? (
+                      <span className="text-[11px] text-amber-400/90" title={bi("Admin accounts cannot be deleted.", "Tài khoản admin không thể xóa.")}>
+                        —
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={adminUserBusy}
+                        onClick={() => void removeAdminUserAccount(row.id)}
+                        className="text-rose-400 hover:text-rose-300 hover:underline disabled:opacity-50"
+                      >
+                        {bi("Remove", "Xóa")}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
-              {manualLicenses.length === 0 && (
+              {!adminUsersLoading && adminUsers.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="p-3 text-amber-400">
-                    {bi(
-                      "No rows yet. Add license key, email, and password above.",
-                      "Chưa có dòng. Thêm mã license, email và mật khẩu phía trên."
-                    )}
+                  <td colSpan={6} className="p-3 text-amber-400">
+                    {bi("No admin accounts yet.", "Chưa có tài khoản admin.")}
                   </td>
                 </tr>
               )}
@@ -1421,141 +1720,31 @@ export default function AdminPage() {
           </table>
         </div>
       </section>
+      )}
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      {can("cms:read") && (
+      <div className={`grid gap-6 ${can("backup:manage") ? "lg:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]" : ""}`}>
       <section className="rounded-xl border border-amber-500/35 bg-black/80 p-4 shadow-[0_4px_40px_rgba(0,0,0,0.5)] backdrop-blur-md">
         <h1 className="text-xl font-semibold text-white">{bi("CMS meanings", "Nội dung CMS (ý nghĩa)")}</h1>
         <p className="mt-1 text-sm text-amber-200">
           {bi("Edit planet, house, and aspect explanations shown on the public chart.", "Chỉnh giải thích hành tinh, nhà và aspect hiển thị trên lá số công khai.")}
         </p>
-        <form
-          className="mt-4 space-y-2 rounded-lg border border-amber-500/25 bg-zinc-950/70 p-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void handleCreate();
-          }}
-        >
-          <select
-            className="w-full rounded border border-zinc-600 bg-zinc-950 p-2 text-sm text-white [color-scheme:dark]"
-            value={form.category}
-            onChange={(e) => {
-              const nextCategory = e.target.value as Meaning["category"];
-              const nextDefaultKey = (() => {
-                if (nextCategory === "planet_sign") return "sun_aries";
-                if (nextCategory === "planet_house") return "sun_1";
-                if (nextCategory === "aspect") return "sun_conjunction_moon";
-                if (nextCategory === "house") return "house_1";
-                return "house_1_aries";
-              })();
-              const matchingMeaning = meanings.find((item) => item.category === nextCategory && item.key === nextDefaultKey);
-              applyMeaningToForm(nextCategory, nextDefaultKey, matchingMeaning);
-              setUseCustomKey(false);
-            }}
-          >
-            <option value="planet_sign" className="bg-zinc-950 text-white">
-              {bi("Planet in sign", "Hành tinh trong cung")}
-            </option>
-            <option value="planet_house" className="bg-zinc-950 text-white">
-              {bi("Planet in house", "Hành tinh trong nhà")}
-            </option>
-            <option value="aspect" className="bg-zinc-950 text-white">
-              {bi("Aspect", "Aspect (góc)")}
-            </option>
-            <option value="house" className="bg-zinc-950 text-white">
-              {bi("House meaning", "Ý nghĩa nhà")}
-            </option>
-            <option value="house_sign" className="bg-zinc-950 text-white">
-              {bi("House in sign", "Nhà trong cung")}
-            </option>
-          </select>
-          {!useCustomKey ? (
-            <select
-              className="w-full rounded border border-zinc-600 bg-zinc-950 p-2 text-sm text-white [color-scheme:dark]"
-              value={form.key || keyOptions[0]}
-              onChange={(e) => {
-                const nextKey = e.target.value;
-                const matchingMeaning = meanings.find((item) => item.category === form.category && item.key === nextKey);
-                applyMeaningToForm(form.category, nextKey, matchingMeaning);
-              }}
-            >
-              {keyOptions.map((key) => (
-                <option key={key} value={key} className="bg-zinc-950 text-white">
-                  {key}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input
-              className="w-full rounded border border-zinc-600 bg-zinc-950 p-2 text-white placeholder:text-zinc-500"
-              placeholder={bi("Key (e.g. sun_aries)", "Khóa (vd. sun_aries)")}
-              value={form.key}
-              onChange={(e) => {
-                const nextKey = e.target.value;
-                const matchingMeaning = meanings.find((item) => item.category === form.category && item.key === nextKey.trim());
-                applyMeaningToForm(form.category, nextKey, matchingMeaning);
-              }}
-            />
-          )}
-          <p className={`text-xs ${selectedMeaning ? "text-emerald-400" : "text-amber-400"}`}>
-            {selectedMeaning
-              ? bi("This key already has content — you are editing it.", "Khóa này đã có nội dung — bạn đang chỉnh sửa.")
-              : bi("No content for this key yet — saving will create a new entry.", "Chưa có nội dung — lưu sẽ tạo mục mới.")}
-          </p>
-          <button
-            type="button"
-            className="text-left text-xs text-amber-400 underline hover:text-amber-300"
-            onClick={() => {
-              const next = !useCustomKey;
-              setUseCustomKey(next);
-              if (!next && !form.key && keyOptions[0]) {
-                setForm({ ...form, key: keyOptions[0] });
-              }
-            }}
-          >
-            {useCustomKey ? bi("Use dropdown keys", "Chọn khóa từ danh sách") : bi("Type custom key manually", "Nhập khóa tùy chỉnh")}
-          </button>
-          <input
-            className="w-full rounded border border-zinc-600 bg-zinc-950 p-2 text-white placeholder:text-zinc-500"
-            placeholder={bi("Title (English)", "Tiêu đề (English)")}
-            value={form.titleEn}
-            onChange={(e) => setForm({ ...form, titleEn: e.target.value })}
+        <div className="mt-4">
+          <CmsMeaningsBulkEditor
+            token={token}
+            refreshSignal={cmsRefreshSignal}
+            readOnly={cmsReadOnly}
+            onMessage={setMessage}
+            onUnauthorized={handleUnauthorized}
           />
-          <input
-            className="w-full rounded border border-zinc-600 bg-zinc-950 p-2 text-white placeholder:text-zinc-500"
-            placeholder={bi("Title (Vietnamese)", "Tiêu đề (Tiếng Việt)")}
-            value={form.titleVi}
-            onChange={(e) => setForm({ ...form, titleVi: e.target.value })}
-          />
-          <textarea
-            className="h-28 w-full rounded border border-zinc-600 bg-zinc-950 p-2 text-white placeholder:text-zinc-500"
-            placeholder={bi("Content (English)", "Nội dung (English)")}
-            value={form.contentEn}
-            onChange={(e) => setForm({ ...form, contentEn: e.target.value })}
-          />
-          <textarea
-            className="h-28 w-full rounded border border-zinc-600 bg-zinc-950 p-2 text-white placeholder:text-zinc-500"
-            placeholder={bi("Content (Vietnamese)", "Nội dung (Tiếng Việt)")}
-            value={form.contentVi}
-            onChange={(e) => setForm({ ...form, contentVi: e.target.value })}
-          />
-          <button
-            className="rounded bg-amber-600 px-4 py-2 font-medium text-white hover:bg-amber-500 disabled:cursor-not-allowed disabled:bg-zinc-700"
-            type="button"
-            onClick={() => void handleCreate()}
-            disabled={loading}
-          >
-            {loading
-              ? bi("Saving…", "Đang lưu…")
-              : editingId
-                ? bi("Update meaning", "Cập nhật nội dung")
-                : bi("Create meaning", "Tạo nội dung")}
-          </button>
-          {message && <p className={`text-xs ${adminNoticeClass(message)}`}>{message}</p>}
-        </form>
+        </div>
+        {message && <p className={`mt-3 text-xs ${adminNoticeClass(message)}`}>{message}</p>}
       </section>
 
-      <section className="space-y-4 rounded-xl border border-amber-500/35 bg-black/80 p-4 shadow-[0_4px_40px_rgba(0,0,0,0.5)] backdrop-blur-md">
-        <div className="flex gap-2">
+      {can("backup:manage") && (
+      <section className="space-y-4 rounded-xl border border-amber-500/35 bg-black/80 p-4 shadow-[0_4px_40px_rgba(0,0,0,0.5)] backdrop-blur-md lg:sticky lg:top-4 lg:self-start">
+        <h2 className="text-sm font-semibold text-white">{bi("Import / export", "Nhập / xuất")}</h2>
+        <div className="flex flex-wrap gap-2">
           <button
             type="button"
             className="rounded bg-zinc-700 px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:bg-zinc-800"
@@ -1604,58 +1793,18 @@ export default function AdminPage() {
         />
         <button
           type="button"
-          className="rounded bg-emerald-600 px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:bg-emerald-900"
+          className="w-full rounded bg-emerald-600 px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:bg-emerald-900"
           onClick={importFromJson}
           disabled={importing}
         >
           {importing ? bi("Importing…", "Đang nhập…") : bi("Import JSON", "Nhập JSON")}
         </button>
-
-        <div className="space-y-2">
-          {displayedMeanings.map((meaning) => (
-            <article key={meaning._id} className="rounded border border-amber-500/25 bg-zinc-950/85 p-3">
-              <p className="text-xs uppercase tracking-wide text-amber-300">{meaning.category}</p>
-              <h3 className="font-semibold text-white">{meaning.title.en}</h3>
-              <p className="text-xs text-amber-200">{meaning.title.vi}</p>
-              <p className="whitespace-pre-line text-sm leading-relaxed text-white">{meaning.content.en}</p>
-              <p className="whitespace-pre-line text-sm leading-relaxed text-amber-200">{meaning.content.vi}</p>
-              <div className="mt-2 flex gap-2 text-xs">
-                <button
-                  className="rounded bg-zinc-700 px-2 py-1 text-white hover:bg-zinc-600"
-                  onClick={() => {
-                    setEditingId(meaning._id);
-                    setForm({
-                      category: meaning.category,
-                      key: meaning.key,
-                      titleEn: meaning.title.en,
-                      titleVi: meaning.title.vi,
-                      contentEn: meaning.content.en,
-                      contentVi: meaning.content.vi
-                    });
-                    setUseCustomKey(false);
-                  }}
-                >
-                  {bi("Edit", "Sửa")}
-                </button>
-                <button
-                  className="rounded bg-rose-600 px-2 py-1 text-white hover:bg-rose-500"
-                  onClick={() => removeMeaning(meaning._id)}
-                >
-                  {bi("Delete", "Xóa")}
-                </button>
-              </div>
-            </article>
-          ))}
-          {displayedMeanings.length === 0 && (
-            <p className="text-sm text-amber-300">
-              {bi("No entries for key", "Không có mục cho khóa")}{" "}
-              <span className="text-amber-100">{form.key.trim() || bi("(empty)", "(trống)")}</span>{" "}
-              {bi("in category", "trong loại")} <span className="text-amber-100">{form.category}</span>.
-            </p>
-          )}
-        </div>
       </section>
+      )}
       </div>
+      )}
+        </>
+      )}
     </main>
   );
 }

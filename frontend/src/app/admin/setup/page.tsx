@@ -7,27 +7,39 @@ import { bi } from "@/lib/bilingual";
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api";
 
 export default function AdminSetupPage() {
-  const [licenseKey, setLicenseKey] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [dbReady, setDbReady] = useState<boolean | null>(null);
+  const [setupAvailable, setSetupAvailable] = useState<boolean | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const response = await fetch(`${API_URL}/auth/setup-status`);
-        const data = (await response.json().catch(() => null)) as { databaseReady?: boolean } | null;
+        const data = (await response.json().catch(() => null)) as {
+          databaseReady?: boolean;
+          setupAvailable?: boolean;
+          hasAdminUsers?: boolean;
+        } | null;
         if (cancelled) return;
         if (data && typeof data.databaseReady === "boolean") {
           setDbReady(data.databaseReady);
         } else {
           setDbReady(null);
         }
+        if (data && typeof data.setupAvailable === "boolean") {
+          setSetupAvailable(data.setupAvailable);
+        } else {
+          setSetupAvailable(null);
+        }
       } catch {
-        if (!cancelled) setDbReady(null);
+        if (!cancelled) {
+          setDbReady(null);
+          setSetupAvailable(null);
+        }
       }
     })();
     return () => {
@@ -44,7 +56,6 @@ export default function AdminSetupPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          licenseKey: licenseKey.trim(),
           email: email.trim(),
           password
         })
@@ -54,22 +65,27 @@ export default function AdminSetupPage() {
         if (response.status === 503) {
           setMessage(
             bi(
-              "Database unavailable. License activation requires MongoDB.\n\n• Start MongoDB locally or point the API at your cluster.\n• Set MONGO_URI in the API environment (default: mongodb://127.0.0.1:27017/astrology_app).",
-              "Chưa kết nối được CSDL. Kích hoạt license cần MongoDB đang chạy.\n\n• Khởi động MongoDB hoặc trỏ API tới cluster.\n• Đặt MONGO_URI trên server API (mặc định: mongodb://127.0.0.1:27017/astrology_app)."
+              "Database unavailable. Admin setup requires MongoDB.\n\n• Start MongoDB locally or point the API at your cluster.\n• Set MONGO_URI in the API environment (default: mongodb://127.0.0.1:27017/astrology_app).",
+              "Chưa kết nối được CSDL. Thiết lập admin cần MongoDB đang chạy.\n\n• Khởi động MongoDB hoặc trỏ API tới cluster.\n• Đặt MONGO_URI trên server API (mặc định: mongodb://127.0.0.1:27017/astrology_app)."
             )
           );
           setDbReady(false);
           return;
         }
+        if (response.status === 403) {
+          setMessage(
+            bi(
+              "An admin account already exists. Sign in or ask an existing admin to create your account.",
+              "Đã có tài khoản admin. Hãy đăng nhập hoặc nhờ admin hiện tại tạo tài khoản cho bạn."
+            )
+          );
+          setSetupAvailable(false);
+          return;
+        }
         const errText =
           typeof data?.error === "string"
-            ? bi(data.error, "Kiểm tra license, email và mật khẩu (tối thiểu 6 ký tự).")
-            : typeof data?.error === "object" && data?.error !== null
-              ? bi(
-                  "Invalid input — check license key, email, and password (min 6 characters).",
-                  "Dữ liệu không hợp lệ — kiểm tra license, email và mật khẩu (tối thiểu 6 ký tự)."
-                )
-              : bi("Setup failed.", "Thiết lập thất bại.");
+            ? data.error
+            : bi("Setup failed. Check email and password (min 6 characters).", "Thiết lập thất bại. Kiểm tra email và mật khẩu (tối thiểu 6 ký tự).");
         setMessage(errText);
         return;
       }
@@ -95,8 +111,8 @@ export default function AdminSetupPage() {
         <h1 className="text-xl font-semibold text-white">{bi("Admin setup", "Thiết lập quản trị")}</h1>
         <p className="mt-2 text-sm leading-relaxed text-amber-200">
           {bi(
-            "Use the license key, then choose the email and password for your new admin account. Each license works once.",
-            "Dùng mã license, sau đó chọn email và mật khẩu cho tài khoản admin mới. Mỗi license chỉ dùng một lần."
+            "Create the first admin account with email and password. This page is only available when no admin exists yet.",
+            "Tạo tài khoản admin đầu tiên bằng email và mật khẩu. Trang này chỉ dùng khi chưa có admin nào."
           )}
         </p>
       </div>
@@ -111,8 +127,8 @@ export default function AdminSetupPage() {
           </p>
           <p className="mt-2 whitespace-pre-line leading-relaxed text-amber-100/95">
             {bi(
-              "License activation is stored in the database. Start MongoDB and ensure the API's ",
-              "Kích hoạt license lưu trong CSDL. Hãy chạy MongoDB và đảm bảo "
+              "Admin accounts are stored in the database. Start MongoDB and ensure the API's ",
+              "Tài khoản admin lưu trong CSDL. Hãy chạy MongoDB và đảm bảo "
             )}
             <code className="rounded bg-zinc-900 px-1 py-0.5 font-mono text-[11px] text-amber-200">MONGO_URI</code>
             {bi(" on the API is correct, then refresh this page.", " trên API đúng, rồi tải lại trang.")}
@@ -120,21 +136,22 @@ export default function AdminSetupPage() {
         </div>
       )}
 
+      {setupAvailable === false && dbReady !== false && (
+        <div
+          role="alert"
+          className="rounded-xl border border-sky-500/40 bg-sky-950/30 px-4 py-3 text-sm text-sky-100"
+        >
+          {bi(
+            "An admin account already exists. Sign in at /admin or ask an existing admin to create your account.",
+            "Đã có tài khoản admin. Đăng nhập tại /admin hoặc nhờ admin hiện tại tạo tài khoản cho bạn."
+          )}
+        </div>
+      )}
+
       <form
         className="space-y-4 rounded-xl border border-amber-500/35 bg-black/80 p-4 shadow-[0_4px_40px_rgba(0,0,0,0.5)] backdrop-blur-md"
         onSubmit={onSubmit}
       >
-        <div>
-          <label className="mb-1 block text-xs font-medium text-amber-100">{bi("License key", "Mã license")}</label>
-          <input
-            className="w-full rounded border border-zinc-600 bg-zinc-950 p-2 text-sm text-white placeholder:text-zinc-500"
-            value={licenseKey}
-            onChange={(e) => setLicenseKey(e.target.value)}
-            placeholder="ASL-…"
-            autoComplete="off"
-            required
-          />
-        </div>
         <div>
           <label className="mb-1 block text-xs font-medium text-amber-100">{bi("Email", "Email")}</label>
           <input
@@ -144,6 +161,7 @@ export default function AdminSetupPage() {
             onChange={(e) => setEmail(e.target.value)}
             autoComplete="email"
             required
+            disabled={setupAvailable === false}
           />
         </div>
         <div>
@@ -158,11 +176,12 @@ export default function AdminSetupPage() {
             autoComplete="new-password"
             minLength={6}
             required
+            disabled={setupAvailable === false}
           />
         </div>
         <button
           type="submit"
-          disabled={loading}
+          disabled={loading || setupAvailable === false}
           className="w-full rounded-lg bg-amber-600 py-2 text-sm font-semibold text-white hover:bg-amber-500 disabled:bg-zinc-700"
         >
           {loading

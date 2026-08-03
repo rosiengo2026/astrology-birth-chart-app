@@ -52,3 +52,54 @@ export interface LocationOption {
   longitude: number;
   timezone: string;
 }
+
+export type TransitPhase = "applying" | "exact" | "separating";
+
+export interface NatalTransitHit {
+  transiting: string;
+  natal: string;
+  type: string;
+  orb: number;
+  phase: TransitPhase;
+  strength: number;
+  isRetrograde: boolean;
+  symbol: string;
+}
+
+export interface TransitsResponse {
+  natal: ChartResponse["chart"];
+  transitMoment: {
+    date: string;
+    time: string;
+    timezone: string;
+    julianDay: number;
+  };
+  transitLocation: {
+    city: string;
+    country: string;
+    latitude: number;
+    longitude: number;
+    timezone: string;
+  };
+  transitSky: ChartResponse["chart"];
+  transits: NatalTransitHit[];
+}
+
+export interface SynastryAspectHit {
+  personA: string;
+  personB: string;
+  type: string;
+  orb: number;
+}
+
+export interface SynastryResponse {
+  personA: {
+    label: string;
+    chart: ChartResponse["chart"];
+  };
+  personB: {
+    label: string;
+    chart: ChartResponse["chart"];
+  };
+  aspects: SynastryAspectHit[];
+}

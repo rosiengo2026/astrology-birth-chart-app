@@ -2,6 +2,7 @@ import * as Astronomy from "astronomy-engine";
 import { DateTime } from "luxon";
 import { ZODIAC_SIGNS } from "../constants";
 import { ChartData, ChartPointName, PlanetPosition } from "../types";
+import { computeExtraEphemerisPoints } from "./extraEphemeris";
 // This engine provides tropical zodiac + Placidus houses + nodes/lilith.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { Origin, Horoscope } = require("circular-natal-horoscope-js") as {
@@ -70,7 +71,7 @@ function parseBirthDate(date: string): { year: number; month: number; day: numbe
   throw new Error("Invalid date format. Use YYYY-MM-DD or DD/MM/YYYY.");
 }
 
-function calculateJulianDay(date: string, time: string, timezone: string): number {
+export function calculateJulianDay(date: string, time: string, timezone: string): number {
   const { year, month, day } = parseBirthDate(date);
   const { hour, minute } = parseBirthTime(time);
   const isoTime = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
@@ -95,6 +96,7 @@ function mapBodyKeyToName(key: string): ChartPointName | null {
     uranus: "Uranus",
     neptune: "Neptune",
     pluto: "Pluto",
+    chiron: "Chiron",
     northnode: "North Node",
     southnode: "South Node",
     lilith: "Lilith"
@@ -102,6 +104,24 @@ function mapBodyKeyToName(key: string): ChartPointName | null {
   return map[key] ?? null;
 }
 
+function isDiurnalChart(sunLongitude: number, ascendant: number): boolean {
+  return normalizeDegree(sunLongitude - ascendant) < 180;
+}
+
+function makeCalculatedPoint(
+  name: ChartPointName,
+  longitude: number,
+  houses: Array<{ house: number; cuspLongitude: number }>
+): PlanetPosition {
+  const normalized = normalizeDegree(longitude);
+  return {
+    planet: name,
+    longitude: Number(normalized.toFixed(4)),
+    sign: signFromLongitude(normalized),
+    house: houseFromLongitude(normalized, houses),
+    type: "point"
+  };
+}
 function houseFromLongitude(longitude: number, houses: Array<{ house: number; cuspLongitude: number }>): number {
   const sorted = [...houses].sort((a, b) => a.house - b.house);
   for (let i = 0; i < sorted.length; i += 1) {
@@ -254,6 +274,68 @@ function computeMajorAspectsFromLongitudes(points: PlanetPosition[]): ChartData[
   return aspects.sort((a, b) => a.orb - b.orb);
 }
 
+export function collectSynastryPoints(chart: ChartData): Array<{ name: string; longitude: number }> {
+  const points: Array<{ name: string; longitude: number }> = chart.planets.map((planet) => ({
+    name: planet.planet,
+    longitude: planet.longitude
+  }));
+  points.push(
+    { name: "ASC", longitude: chart.ascendant },
+    { name: "MC", longitude: chart.midheaven },
+    { name: "DC", longitude: chart.descendant },
+    { name: "IC", longitude: chart.imumCoeli }
+  );
+  return points;
+}
+
+export function computeSynastryAspects(
+  chartA: ChartData,
+  chartB: ChartData
+): Array<{ personA: string; personB: string; type: ChartData["aspects"][number]["type"]; orb: number }> {
+  const defs: Array<{ type: ChartData["aspects"][number]["type"]; angle: number }> = [
+    { type: "Conjunction", angle: 0 },
+    { type: "Opposition", angle: 180 },
+    { type: "Square", angle: 90 },
+    { type: "Trine", angle: 120 },
+    { type: "Sextile", angle: 60 }
+  ];
+
+  const pointsA = collectSynastryPoints(chartA);
+  const pointsB = collectSynastryPoints(chartB);
+  const aspects: Array<{ personA: string; personB: string; type: ChartData["aspects"][number]["type"]; orb: number }> =
+    [];
+
+  for (const left of pointsA) {
+    for (const right of pointsB) {
+      const separation = angularDistance(left.longitude, right.longitude);
+      let best: { type: ChartData["aspects"][number]["type"]; delta: number } | null = null;
+
+      for (const def of defs) {
+        const delta = Math.abs(separation - def.angle);
+        const maxOrb = maxOrbForAspect(
+          def.type,
+          left.name as ChartPointName,
+          right.name as ChartPointName
+        );
+        if (delta <= maxOrb + 1e-6 && (!best || delta < best.delta - 1e-9)) {
+          best = { type: def.type, delta };
+        }
+      }
+
+      if (best) {
+        aspects.push({
+          personA: left.name,
+          personB: right.name,
+          type: best.type,
+          orb: Number(best.delta.toFixed(4))
+        });
+      }
+    }
+  }
+
+  return aspects.sort((a, b) => a.orb - b.orb);
+}
+
 export function generateNatalChart(input: {
   date: string;
   time: string;
@@ -336,21 +418,54 @@ export function generateNatalChart(input: {
 
   const moon = mappedBodies.find((planet) => planet.planet === "Moon");
   const sun = mappedBodies.find((planet) => planet.planet === "Sun");
-  const partOfFortuneLongitude = normalizeDegree(
-    ascendant + (moon?.longitude ?? 0) - (sun?.longitude ?? 0)
-  );
+  const venus = mappedBodies.find((planet) => planet.planet === "Venus");
+  const mars = mappedBodies.find((planet) => planet.planet === "Mars");
+  const jupiter = mappedBodies.find((planet) => planet.planet === "Jupiter");
+  const saturn = mappedBodies.find((planet) => planet.planet === "Saturn");
+  const lilith = mappedPoints.find((point) => point.planet === "Lilith");
 
-  const partOfFortune: PlanetPosition = {
-    planet: "Part of Fortune",
-    longitude: Number(partOfFortuneLongitude.toFixed(4)),
-    sign: signFromLongitude(partOfFortuneLongitude),
-    house: houseFromLongitude(partOfFortuneLongitude, houses),
-    type: "point"
-  };
+  const diurnal = isDiurnalChart(sun?.longitude ?? 0, ascendant);
+  const asc = ascendant;
+  const sunLon = sun?.longitude ?? 0;
+  const moonLon = moon?.longitude ?? 0;
+  const venusLon = venus?.longitude ?? 0;
+  const marsLon = mars?.longitude ?? 0;
+  const jupiterLon = jupiter?.longitude ?? 0;
+  const saturnLon = saturn?.longitude ?? 0;
 
-  const allPoints = [...mappedBodies, ...mappedPoints, partOfFortune];
-  // Aspects: engine longitudes, but our own orb rules (Part of Fortune omitted — not in standard grids).
-  const aspects = computeMajorAspectsFromLongitudes([...mappedBodies, ...mappedPoints]);
+  const calculatedPoints: PlanetPosition[] = [
+    makeCalculatedPoint(
+      "Part of Fortune",
+      diurnal ? asc + moonLon - sunLon : asc + sunLon - moonLon,
+      houses
+    ),
+    makeCalculatedPoint(
+      "Part of Spirit",
+      diurnal ? asc + sunLon - moonLon : asc + moonLon - sunLon,
+      houses
+    ),
+    makeCalculatedPoint(
+      "Part of Eros",
+      diurnal ? asc + venusLon - sunLon : asc + sunLon - venusLon,
+      houses
+    ),
+    makeCalculatedPoint(
+      "Part of Marriage",
+      diurnal ? asc + venusLon - jupiterLon : asc + jupiterLon - venusLon,
+      houses
+    ),
+    makeCalculatedPoint("Part of Calamity", asc + marsLon - saturnLon, houses)
+  ];
+
+  if (lilith) {
+    calculatedPoints.push(makeCalculatedPoint("Priapus", lilith.longitude + 180, houses));
+  }
+
+  const extraEphemerisPoints = computeExtraEphemerisPoints(julianDay, houses);
+
+  const allPoints = [...mappedBodies, ...mappedPoints, ...calculatedPoints, ...extraEphemerisPoints];
+  const aspectPoints = [...mappedBodies, ...mappedPoints, ...calculatedPoints, ...extraEphemerisPoints];
+  const aspects = computeMajorAspectsFromLongitudes(aspectPoints);
 
   return {
     birth: input,
