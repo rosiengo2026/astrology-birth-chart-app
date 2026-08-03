@@ -30,6 +30,8 @@ export async function connectDatabase(): Promise<boolean> {
     await mongoose.connect(config.mongoUri, {
       serverSelectionTimeoutMS: 5000
     });
+
+    console.log("Mongo database:", mongoose.connection.name);
     databaseReady = true;
     hasLoggedUnavailable = false;
     return true;
