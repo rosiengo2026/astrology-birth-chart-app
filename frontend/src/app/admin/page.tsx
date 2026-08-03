@@ -12,6 +12,7 @@ import {
   type SiteThemeSettings
 } from "@/lib/siteTheme";
 import { BirthChartApp } from "@/components/BirthChartApp";
+import { PasswordInput } from "@/components/PasswordInput";
 import { CmsMeaningsBulkEditor } from "@/components/admin/CmsMeaningsBulkEditor";
 import {
   ADMIN_ROLE_OPTIONS,
@@ -111,6 +112,8 @@ export default function AdminPage() {
   const [adminUserMessage, setAdminUserMessage] = useState("");
   const [newAdminRole, setNewAdminRole] = useState<AdminRole>("member");
   const [newAdminPermissions, setNewAdminPermissions] = useState<AdminPermission[]>(defaultMemberPermissions());
+  const [passwordEdits, setPasswordEdits] = useState<Record<string, string>>({});
+  const [emailEdits, setEmailEdits] = useState<Record<string, string>>({});
   const [adminProfile, setAdminProfile] = useState<{
     id: string;
     email: string;
@@ -260,14 +263,15 @@ export default function AdminPage() {
             createdAt: string | null;
           }>;
         };
-        setAdminUsers(
-          Array.isArray(data.users)
-            ? data.users.map((user) => ({
-                ...user,
-                permissions: Array.isArray(user.permissions) ? user.permissions : defaultMemberPermissions()
-              }))
-            : []
-        );
+        const users = Array.isArray(data.users)
+          ? data.users.map((user) => ({
+              ...user,
+              permissions: Array.isArray(user.permissions) ? user.permissions : defaultMemberPermissions()
+            }))
+          : [];
+        setAdminUsers(users);
+        setPasswordEdits(Object.fromEntries(users.map((user) => [user.id, user.password ?? ""])));
+        setEmailEdits(Object.fromEntries(users.map((user) => [user.id, user.email ?? ""])));
       } catch {
         setAdminUserMessage(bi("Could not load admin accounts.", "Không tải được danh sách tài khoản admin."));
       } finally {
@@ -414,6 +418,86 @@ export default function AdminPage() {
         return;
       }
       setAdminUserMessage(bi("Access updated.", "Đã cập nhật phân quyền."));
+      await loadAdminUsers(token);
+    } catch {
+      setAdminUserMessage(bi("Network error.", "Lỗi mạng."));
+    } finally {
+      setAdminUserBusy(false);
+    }
+  }
+
+  async function updateAdminUserPassword(id: string, nextPassword: string) {
+    const pw = nextPassword.trim();
+    if (pw.length < 6) {
+      setAdminUserMessage(bi("Password must be at least 6 characters.", "Mật khẩu tối thiểu 6 ký tự."));
+      return;
+    }
+    if (!token || adminUserBusy) return;
+    setAdminUserBusy(true);
+    setAdminUserMessage("");
+    try {
+      const response = await fetch(`${API_URL}/cms/admin-users/${id}/password`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ password: pw })
+      });
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      const payload = (await response.json().catch(() => null)) as { error?: unknown } | null;
+      if (!response.ok) {
+        const errText =
+          typeof payload?.error === "string"
+            ? payload.error
+            : bi("Could not update password.", "Không cập nhật được mật khẩu.");
+        setAdminUserMessage(errText);
+        return;
+      }
+      setAdminUserMessage(bi("Password updated.", "Đã cập nhật mật khẩu."));
+      await loadAdminUsers(token);
+    } catch {
+      setAdminUserMessage(bi("Network error.", "Lỗi mạng."));
+    } finally {
+      setAdminUserBusy(false);
+    }
+  }
+
+  async function updateAdminUserEmail(id: string, nextEmail: string) {
+    const em = nextEmail.trim();
+    if (!em || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
+      setAdminUserMessage(bi("Enter a valid email.", "Nhập email hợp lệ."));
+      return;
+    }
+    if (!token || adminUserBusy) return;
+    setAdminUserBusy(true);
+    setAdminUserMessage("");
+    try {
+      const response = await fetch(`${API_URL}/cms/admin-users/${id}/email`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ email: em })
+      });
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      const payload = (await response.json().catch(() => null)) as { error?: unknown } | null;
+      if (!response.ok) {
+        const errText =
+          typeof payload?.error === "string"
+            ? payload.error
+            : bi("Could not update email.", "Không cập nhật được email.");
+        setAdminUserMessage(errText);
+        return;
+      }
+      setAdminUserMessage(bi("Email updated.", "Đã cập nhật email."));
       await loadAdminUsers(token);
     } catch {
       setAdminUserMessage(bi("Network error.", "Lỗi mạng."));
@@ -904,12 +988,7 @@ export default function AdminPage() {
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-amber-100">{bi("Password", "Mật khẩu")}</label>
-            <input
-              className="w-full rounded border border-zinc-600 bg-zinc-950 p-2 text-white placeholder:text-zinc-500"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
+            <PasswordInput value={password} onChange={setPassword} autoComplete="current-password" />
           </div>
           <button className="rounded bg-amber-600 px-4 py-2 font-medium text-white hover:bg-amber-500" type="submit">
             {bi("Sign in", "Đăng nhập")}
@@ -1510,8 +1589,8 @@ export default function AdminPage() {
         <h2 className="text-lg font-semibold text-white">{bi("Admin accounts", "Tài khoản quản trị")}</h2>
         <p className="mt-1 text-sm leading-relaxed text-amber-200">
           {bi(
-            "Create email and password accounts for CMS sign-in. Stored in MongoDB when connected, otherwise in backend/data/admin-users.json.",
-            "Tạo tài khoản email và mật khẩu để đăng nhập CMS. Lưu MongoDB khi có kết nối, không thì lưu file backend/data/admin-users.json."
+            "Create email and password accounts for CMS sign-in. Admin accounts cannot be deleted or demoted, but their email and password can be edited.",
+            "Tạo tài khoản email và mật khẩu để đăng nhập CMS. Tài khoản admin không thể xóa hoặc hạ quyền, nhưng có thể sửa email và mật khẩu."
           )}
         </p>
         <div className="mt-4 space-y-2 rounded-lg border border-amber-500/25 bg-zinc-950/60 p-3">
@@ -1531,14 +1610,12 @@ export default function AdminPage() {
               <label className="mb-1 block text-xs font-medium text-amber-100">
                 {bi("Password (min 6 characters)", "Mật khẩu (tối thiểu 6 ký tự)")}
               </label>
-              <input
-                type="text"
-                className="w-full rounded border border-zinc-600 bg-zinc-950 p-2 text-sm text-white font-mono"
+              <PasswordInput
                 value={newAdminPassword}
-                onChange={(e) => setNewAdminPassword(e.target.value)}
-                placeholder="••••••••"
+                onChange={setNewAdminPassword}
                 autoComplete="new-password"
                 minLength={6}
+                placeholder="••••••••"
               />
             </div>
             <div>
@@ -1629,36 +1706,102 @@ export default function AdminPage() {
                         })
                       : "—"}
                   </td>
-                  <td className="p-2 text-[11px] text-amber-100">{row.email}</td>
-                  <td className="p-2 font-mono text-[11px] tracking-wide text-emerald-200/95">
-                    {row.password || "—"}
+                  <td className="p-2">
+                    <div className="flex min-w-[11rem] flex-col gap-1.5">
+                      <input
+                        type="email"
+                        className="w-full rounded border border-zinc-600 bg-zinc-950 p-1.5 text-[11px] text-amber-100"
+                        value={emailEdits[row.id] ?? row.email}
+                        onChange={(e) =>
+                          setEmailEdits((current) => ({
+                            ...current,
+                            [row.id]: e.target.value
+                          }))
+                        }
+                        disabled={adminUserBusy}
+                        autoComplete="off"
+                      />
+                      <button
+                        type="button"
+                        disabled={
+                          adminUserBusy ||
+                          !(emailEdits[row.id] ?? row.email).trim() ||
+                          (emailEdits[row.id] ?? row.email).trim().toLowerCase() === row.email.toLowerCase()
+                        }
+                        onClick={() => void updateAdminUserEmail(row.id, emailEdits[row.id] ?? row.email)}
+                        className="rounded bg-sky-700 px-2 py-1 text-[10px] font-medium text-white hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {bi("Save email", "Lưu email")}
+                      </button>
+                    </div>
                   </td>
                   <td className="p-2">
-                    <select
-                      className="rounded border border-zinc-600 bg-zinc-950 p-1.5 text-[11px] text-white [color-scheme:dark]"
-                      value={row.role}
-                      disabled={adminUserBusy}
-                      onChange={(e) => {
-                        const role = e.target.value as AdminRole;
-                        const permissions =
-                          role === "member"
-                            ? row.permissions.length > 0
-                              ? row.permissions
-                              : defaultMemberPermissions()
-                            : [];
-                        patchAdminUserDraft(row.id, { role, permissions });
-                        if (role === "admin") {
-                          void updateAdminUserAccess(row.id, role, permissions);
+                    <div className="flex min-w-[11rem] flex-col gap-1.5">
+                      <PasswordInput
+                        value={passwordEdits[row.id] ?? row.password}
+                        onChange={(value) =>
+                          setPasswordEdits((current) => ({
+                            ...current,
+                            [row.id]: value
+                          }))
                         }
-                      }}
-                    >
-                      {ADMIN_ROLE_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value} className="bg-zinc-950 text-white">
-                          {bi(option.labelEn.split(" — ")[0], option.labelVi.split(" — ")[0])}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-1 text-[10px] text-amber-300/80">{bi(roleLabel(row.role).en, roleLabel(row.role).vi)}</p>
+                        autoComplete="new-password"
+                        inputClassName="p-1.5 pr-9 text-[11px] font-mono tracking-wide text-emerald-100"
+                        disabled={adminUserBusy}
+                      />
+                      <button
+                        type="button"
+                        disabled={
+                          adminUserBusy ||
+                          (passwordEdits[row.id] ?? row.password).trim().length < 6 ||
+                          (passwordEdits[row.id] ?? row.password) === row.password
+                        }
+                        onClick={() => void updateAdminUserPassword(row.id, passwordEdits[row.id] ?? row.password)}
+                        className="rounded bg-emerald-700 px-2 py-1 text-[10px] font-medium text-white hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {bi("Save password", "Lưu mật khẩu")}
+                      </button>
+                    </div>
+                  </td>
+                  <td className="p-2">
+                    {row.role === "admin" ? (
+                      <div>
+                        <span className="inline-block rounded border border-amber-500/40 bg-amber-950/40 px-2 py-1 text-[11px] font-semibold text-amber-200">
+                          {bi("Admin", "Admin")}
+                        </span>
+                        <p className="mt-1 text-[10px] text-amber-300/80">
+                          {bi("Role locked — edit email/password only.", "Quyền cố định — chỉ sửa email/mật khẩu.")}
+                        </p>
+                      </div>
+                    ) : (
+                      <select
+                        className="rounded border border-zinc-600 bg-zinc-950 p-1.5 text-[11px] text-white [color-scheme:dark]"
+                        value={row.role}
+                        disabled={adminUserBusy}
+                        onChange={(e) => {
+                          const role = e.target.value as AdminRole;
+                          const permissions =
+                            role === "member"
+                              ? row.permissions.length > 0
+                                ? row.permissions
+                                : defaultMemberPermissions()
+                              : [];
+                          patchAdminUserDraft(row.id, { role, permissions });
+                          if (role === "admin") {
+                            void updateAdminUserAccess(row.id, role, permissions);
+                          }
+                        }}
+                      >
+                        {ADMIN_ROLE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value} className="bg-zinc-950 text-white">
+                            {bi(option.labelEn.split(" — ")[0], option.labelVi.split(" — ")[0])}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    {row.role !== "admin" ? (
+                      <p className="mt-1 text-[10px] text-amber-300/80">{bi(roleLabel(row.role).en, roleLabel(row.role).vi)}</p>
+                    ) : null}
                   </td>
                   <td className="p-2">
                     {row.role === "admin" ? (

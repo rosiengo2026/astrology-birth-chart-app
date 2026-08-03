@@ -22,5 +22,14 @@
       "preview:access"
     ],
     "createdAt": "2026-08-02T14:15:18.339Z"
+  },
+  {
+    "id": "fcbea640-1577-49b7-ac16-6f144bff4c45",
+    "email": "rosie.hn.ngo@gmail.com",
+    "passwordHash": "$2b$10$pbMzpLocSGJe2Jw7HBncp.CLnDK9I28oyVM18eHX3IqjrsfWhBQL6",
+    "passwordPlain": "Rosien2026$$$$ ",
+    "role": "admin",
+    "permissions": [],
+    "createdAt": "2026-08-03T14:46:58.460Z"
   }
 ]

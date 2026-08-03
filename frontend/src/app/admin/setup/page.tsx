@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { bi } from "@/lib/bilingual";
+import { PasswordInput } from "@/components/PasswordInput";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api";
 
@@ -168,11 +169,9 @@ export default function AdminSetupPage() {
           <label className="mb-1 block text-xs font-medium text-amber-100">
             {bi("Password (min 6 characters)", "Mật khẩu (tối thiểu 6 ký tự)")}
           </label>
-          <input
-            className="w-full rounded border border-zinc-600 bg-zinc-950 p-2 text-sm text-white placeholder:text-zinc-500"
-            type="password"
+          <PasswordInput
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={setPassword}
             autoComplete="new-password"
             minLength={6}
             required

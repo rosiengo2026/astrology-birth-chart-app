@@ -8,7 +8,8 @@
     "dev:lite": "npm run build && node --max-old-space-size=512 dist/server.js",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
-    "seed-admin": "ts-node-dev --transpile-only src/scripts/seedAdmin.ts"
+    "seed-admin": "ts-node-dev --transpile-only src/scripts/seedAdmin.ts",
+    "import-admin-users": "ts-node-dev --transpile-only src/scripts/importLocalAdminUsers.ts"
   },
   "keywords": [],
   "author": "",

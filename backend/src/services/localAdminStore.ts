@@ -148,15 +148,44 @@ export async function updateLocalAdminAccess(
   const current = items[index];
   const nextRole = normalizeAdminRole(role, current.role);
   if (current.role === "admin" && nextRole !== "admin") {
-    const adminCount = items.filter((item) => item.role === "admin").length;
-    if (adminCount <= 1) {
-      throw new Error("LAST_ADMIN");
-    }
+    throw new Error("ADMIN_ROLE_PROTECTED");
   }
   items[index] = {
     ...current,
     role: nextRole,
     permissions: nextRole === "admin" ? [] : sanitizeMemberPermissions(permissions)
+  };
+  await writeAll(items);
+}
+
+export async function updateLocalAdminEmail(id: string, email: string): Promise<void> {
+  const normalized = email.toLowerCase().trim();
+  const items = await readAll();
+  const index = items.findIndex((item) => item.id === id);
+  if (index < 0) {
+    throw new Error("NOT_FOUND");
+  }
+  if (items.some((item) => item.id !== id && item.email === normalized)) {
+    throw new Error("EMAIL_IN_USE");
+  }
+  items[index] = {
+    ...items[index],
+    email: normalized
+  };
+  await writeAll(items);
+}
+
+export async function updateLocalAdminPassword(id: string, password: string): Promise<void> {
+  const items = await readAll();
+  const index = items.findIndex((item) => item.id === id);
+  if (index < 0) {
+    throw new Error("NOT_FOUND");
+  }
+  const passwordHash = await bcrypt.hash(password, 10);
+  items[index] = {
+    ...items[index],
+    passwordHash,
+    passwordPlain: password
   };
   await writeAll(items);
 }

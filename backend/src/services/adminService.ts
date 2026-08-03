@@ -19,6 +19,8 @@ import {
   listLocalAdminUsers,
   localEffectivePermissions,
   updateLocalAdminAccess,
+  updateLocalAdminEmail,
+  updateLocalAdminPassword,
   verifyLocalAdminCredentials
 } from "./localAdminStore";
 
@@ -216,13 +218,54 @@ export async function updateAdminUserAccess(
   }
   const currentRole = normalizeAdminRole(target.role, "member");
   if (currentRole === "admin" && normalizedRole !== "admin") {
-    const adminCount = await AdminUserModel.countDocuments({ role: { $in: ["admin", "super_admin"] } });
-    if (adminCount <= 1) {
-      throw new Error("LAST_ADMIN");
-    }
+    throw new Error("ADMIN_ROLE_PROTECTED");
   }
   target.role = normalizedRole;
   target.permissions = memberPermissions;
+  await target.save();
+}
+
+export async function updateAdminUserPassword(id: string, password: string): Promise<void> {
+  if (id === ENV_ADMIN_ID) {
+    throw new Error("ENV_ADMIN");
+  }
+
+  if (!isDatabaseReady()) {
+    await updateLocalAdminPassword(id, password);
+    return;
+  }
+
+  const target = await AdminUserModel.findById(id);
+  if (!target) {
+    throw new Error("NOT_FOUND");
+  }
+  target.passwordHash = await bcrypt.hash(password, 10);
+  target.passwordPlain = password;
+  await target.save();
+}
+
+export async function updateAdminUserEmail(id: string, email: string): Promise<void> {
+  if (id === ENV_ADMIN_ID) {
+    throw new Error("ENV_ADMIN");
+  }
+
+  const normalized = email.toLowerCase().trim();
+
+  if (!isDatabaseReady()) {
+    await updateLocalAdminEmail(id, normalized);
+    return;
+  }
+
+  const existing = await AdminUserModel.findOne({ email: normalized });
+  if (existing && String(existing._id) !== id) {
+    throw new Error("EMAIL_IN_USE");
+  }
+
+  const target = await AdminUserModel.findById(id);
+  if (!target) {
+    throw new Error("NOT_FOUND");
+  }
+  target.email = normalized;
   await target.save();
 }
 

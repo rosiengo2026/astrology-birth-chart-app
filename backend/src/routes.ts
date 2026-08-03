@@ -25,7 +25,7 @@ import {
 import { generateNatalChart } from "./services/chartService";
 import { calculateNatalTransits } from "./services/transitService";
 import { calculateSynastry } from "./services/synastryService";
-import { ensureDefaultAdminUser, ensureDefaultLocalAdminUser, countAdminUsers, createAdminUser, deleteAdminUser, getAdminProfileById, listAdminUsers, updateAdminUserAccess, verifyAdminCredentials } from "./services/adminService";
+import { ensureDefaultAdminUser, ensureDefaultLocalAdminUser, countAdminUsers, createAdminUser, deleteAdminUser, getAdminProfileById, listAdminUsers, updateAdminUserAccess, updateAdminUserEmail, updateAdminUserPassword, verifyAdminCredentials } from "./services/adminService";
 import {
   ADMIN_ROLES,
   MEMBER_ASSIGNABLE_PERMISSIONS,
@@ -252,6 +252,14 @@ const adminUserCreateSchema = z.object({
 const adminUserAccessSchema = z.object({
   role: z.enum(ADMIN_ROLES),
   permissions: z.array(memberPermissionSchema).optional().default([])
+});
+
+const adminUserPasswordSchema = z.object({
+  password: z.string().min(6, "Password must be at least 6 characters")
+});
+
+const adminUserEmailSchema = z.object({
+  email: z.string().email()
 });
 
 router.get("/auth/setup-status", async (_req, res) => {
@@ -1296,11 +1304,79 @@ router.patch("/cms/admin-users/:id/access", ...adminPerm("admin:manage"), async 
       res.status(400).json({ error: "Cannot change role of the last admin." });
       return;
     }
+    if (code === "ADMIN_ROLE_PROTECTED") {
+      res.status(400).json({ error: "Admin role cannot be changed or removed." });
+      return;
+    }
     if (code === "NOT_FOUND") {
       res.status(404).json({ error: "Admin user not found." });
       return;
     }
     const message = err instanceof Error ? err.message : "Failed to update admin access.";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.patch("/cms/admin-users/:id/password", ...adminPerm("admin:manage"), async (req, res) => {
+  const id = typeof req.params.id === "string" ? req.params.id.trim() : "";
+  if (!id) {
+    res.status(400).json({ error: "Admin user id is required." });
+    return;
+  }
+  const parsed = adminUserPasswordSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    await updateAdminUserPassword(id, parsed.data.password);
+    res.json({ ok: true });
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "";
+    if (code === "ENV_ADMIN") {
+      res.status(400).json({ error: "Cannot change password for the environment fallback admin." });
+      return;
+    }
+    if (code === "NOT_FOUND") {
+      res.status(404).json({ error: "Admin user not found." });
+      return;
+    }
+    const message = err instanceof Error ? err.message : "Failed to update admin password.";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.patch("/cms/admin-users/:id/email", ...adminPerm("admin:manage"), async (req, res) => {
+  const id = typeof req.params.id === "string" ? req.params.id.trim() : "";
+  if (!id) {
+    res.status(400).json({ error: "Admin user id is required." });
+    return;
+  }
+  const parsed = adminUserEmailSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    await updateAdminUserEmail(id, parsed.data.email);
+    res.json({ ok: true, email: parsed.data.email.trim().toLowerCase() });
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "";
+    if (code === "ENV_ADMIN") {
+      res.status(400).json({ error: "Cannot change email for the environment fallback admin." });
+      return;
+    }
+    if (code === "EMAIL_IN_USE") {
+      res.status(409).json({ error: "An admin with this email already exists." });
+      return;
+    }
+    if (code === "NOT_FOUND") {
+      res.status(404).json({ error: "Admin user not found." });
+      return;
+    }
+    const message = err instanceof Error ? err.message : "Failed to update admin email.";
     res.status(500).json({ error: message });
   }
 });
