@@ -1,5 +1,6 @@
 import express from "express";
 import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
 import { z } from "zod";
 import { config } from "./config";
 import { connectDatabase, isDatabaseReady } from "./db";
@@ -1411,6 +1412,25 @@ router.delete("/cms/admin-users/:id", ...adminPerm("admin:manage"), async (req, 
     }
     const message = err instanceof Error ? err.message : "Failed to delete admin user.";
     res.status(500).json({ error: message });
+  }
+});
+
+router.get("/debug/meanings", async (_req, res) => {
+  try {
+    const count = await MeaningModel.countDocuments();
+    const sample = await MeaningModel.find().limit(3);
+
+    res.json({
+      dbReady: isDatabaseReady(),
+      database: mongoose.connection.name,
+      collection: MeaningModel.collection.name,
+      count,
+      sample
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: String(err)
+    });
   }
 });
 
