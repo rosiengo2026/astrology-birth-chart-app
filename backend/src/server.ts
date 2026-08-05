@@ -23,6 +23,7 @@ async function bootstrap() {
   app.use("/api", router);
 
   app.listen(config.port, () => {
+    console.log("=== BUILD 9cb146d ===");
     // eslint-disable-next-line no-console
     console.log(`Backend running on http://localhost:${config.port}`);
   });
