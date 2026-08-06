@@ -227,7 +227,11 @@ function resolvePdfFontPath(): string {
     path.join(process.cwd(), "assets/fonts/DejaVuSans.ttf"),
     path.join(process.cwd(), "backend/assets/fonts/DejaVuSans.ttf")
   ];
+  console.log("PDF cwd:", process.cwd());
+  console.log("PDF __dirname:", __dirname);
+  console.log("PDF candidates:", candidates);
   for (const candidate of candidates) {
+    console.log("Checking font:", candidate, fs.existsSync(candidate));
     if (fs.existsSync(candidate)) {
       return candidate;
     }
